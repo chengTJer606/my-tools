@@ -1,0 +1,17 @@
+# ============================================================
+# 磁盘清理脚本配置文件
+# ============================================================
+# sudo 密码（用于系统级清理：journal、coredump、apt 等）
+# 如不想明文存储密码，可配置 sudoers 免密：
+#   echo "<用户名> ALL=(ALL) NOPASSWD: ALL" | sudo tee /etc/sudoers.d/<用户名>
+# 然后将 SUDO_PASSWORD 留空即可
+SUDO_PASSWORD=""
+
+# 自动清理阈值（GB），可清理总量超过此值时自动执行清理
+DEFAULT_THRESHOLD_GB=2
+
+# journal 日志保留天数
+JOURNAL_RETENTION_DAYS=7
+
+# 磁盘使用率告警阈值（%），超过此值即使未超大小阈值也会触发清理
+DISK_USAGE_THRESHOLD=80

@@ -1,0 +1,11 @@
+# Win 版第三方二进制（体积大，走 Releases 发布，见 README）
+win/ffmpeg.exe
+
+# Python 缓存
+__pycache__/
+*.pyc
+
+# 系统杂项
+.DS_Store
+Thumbs.db
+*~

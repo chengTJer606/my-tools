@@ -1,0 +1,8 @@
+# Python 缓存
+__pycache__/
+*.pyc
+
+# 扫描产物（含个人网盘文件名，属隐私，不入库）
+inventory*.json
+scan_result*.json
+out*.json

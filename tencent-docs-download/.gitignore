@@ -1,0 +1,13 @@
+# 安全：访问令牌（真实凭证，永不入库）
+token.txt
+
+# 数据目录：下载进度/文件树/错误记录（含个人文档清单，属隐私）
+data/
+
+# 下载产物
+files/
+share_files_output/
+
+# Python 缓存
+__pycache__/
+*.pyc

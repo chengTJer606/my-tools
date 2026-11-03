@@ -1,0 +1,10 @@
+# === 安全：真实配置含 sudo 密码，永不入库（入库的是 config.conf.example） ===
+config/config.conf
+
+# === 运行产物 ===
+logs/
+state/
+
+# === 系统杂项 ===
+.DS_Store
+*~
