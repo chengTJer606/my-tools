@@ -771,12 +771,29 @@ class RecorderApp(tk.Tk):
         self.done_panel = None      # 内嵌收尾面板（不再弹独立窗口）
         self.done_file = None
         self.cur_region = None      # 本次录制的物理区域 (x,y,w,h)；None=全屏
+        self.last_region_logic = None   # N2：上次框选的逻辑坐标（本次会话内记忆）
+        self._last_size_check = 0.0     # N6：已录大小每 2 秒刷新一次
 
         cfg = load_config()
         self.output_dir = cfg.get("output_dir") or DEFAULT_OUT_DIR
         self.quality_name = cfg.get("quality") or "高清"
+        # F3：录制中窗口半透明度（0=不启用，默认 0.4）
+        try:
+            self.record_alpha = float(cfg.get("record_alpha", 0.4))
+        except (TypeError, ValueError):
+            self.record_alpha = 0.4
+        if not 0 <= self.record_alpha <= 1:
+            self.record_alpha = 0.4
+        # N3：定时停止（分钟，0=不限）
+        try:
+            self.max_minutes = max(0, int(cfg.get("max_minutes", 0)))
+        except (TypeError, ValueError):
+            self.max_minutes = 0
 
         self._build_ui()
+        # N1：窗口快捷键（空格=暂停/继续，Enter=停止；输入框聚焦时不响应）
+        self.bind("<space>", self._hotkey_pause)
+        self.bind("<Return>", self._hotkey_stop)
         self._tick()
         self.protocol("WM_DELETE_WINDOW", self.on_close)
 
@@ -811,7 +828,7 @@ class RecorderApp(tk.Tk):
         tk.Label(bar, text="范围:", fg=self.GRAY, bg=self.BG,
                  font=("Noto Sans CJK SC", 10)).pack(side=tk.LEFT)
         self.scope_var = tk.StringVar(value="全屏")
-        self.scope_box = ttk.Combobox(bar, textvariable=self.scope_var, width=4,
+        self.scope_box = ttk.Combobox(bar, textvariable=self.scope_var, width=7,
                                       values=["全屏", "区域"], state="readonly",
                                       font=("Noto Sans CJK SC", 10))
         self.scope_box.pack(side=tk.LEFT, padx=(2, 8))
@@ -846,6 +863,20 @@ class RecorderApp(tk.Tk):
         self.dir_lbl = tk.Label(row2, text=self._short_dir(), fg=self.FG, bg=self.BG,
                                 font=("Noto Sans CJK SC", 9))
         self.dir_lbl.pack(side=tk.LEFT)
+        # N3：定时停止（分钟，0=不限），录制中禁用修改
+        tk.Label(row2, text="  限时(分):", fg=self.GRAY, bg=self.BG,
+                 font=("Noto Sans CJK SC", 9)).pack(side=tk.LEFT)
+        self.limit_var = tk.StringVar(value=str(self.max_minutes))
+        self.limit_spin = tk.Spinbox(
+            row2, from_=0, to=600, width=4, textvariable=self.limit_var,
+            bg="#424242", fg=self.FG, buttonbackground="#424242",
+            insertbackground=self.FG, relief=tk.FLAT,
+            font=("Noto Sans CJK SC", 9), command=self._on_limit_change)
+        self.limit_spin.pack(side=tk.LEFT)
+        self.limit_spin.bind("<FocusOut>", lambda _e: self._on_limit_change())
+        self.limit_spin.bind("<Return>", lambda _e: self._on_limit_change())
+        tk.Label(row2, text="0=不限", fg=self.GRAY, bg=self.BG,
+                 font=("Noto Sans CJK SC", 9)).pack(side=tk.LEFT, padx=(2, 0))
         self.btn_dir = tk.Button(row2, text="更改", command=self.on_change_dir,
                                  bg="#424242", fg=self.FG, relief=tk.FLAT,
                                  font=("Noto Sans CJK SC", 9), cursor="hand2", bd=0)
@@ -908,8 +939,78 @@ class RecorderApp(tk.Tk):
         self.quality_box.config(state=ro)
         self.scope_box.config(state=ro)
         self.mic_box.config(state=ro)
+        self.limit_spin.config(state=tk.NORMAL if st == "idle" else tk.DISABLED)
         self.btn_dir.config(state=tk.NORMAL if st == "idle" else tk.DISABLED)
         self.btn_close.config(state=tk.NORMAL if st not in ("merging", "countdown", "starting") else tk.DISABLED)
+
+    # ---- N1：窗口快捷键（空格=暂停/继续，Enter=停止） ----
+    def _hotkey_pause(self, event):
+        if isinstance(event.widget, (tk.Entry, ttk.Entry, tk.Spinbox,
+                                     ttk.Combobox, tk.Text)):
+            return   # 输入框聚焦时不抢按键
+        if self.state in ("recording", "paused"):
+            self.on_pause()
+
+    def _hotkey_stop(self, event):
+        if isinstance(event.widget, (tk.Entry, ttk.Entry, tk.Spinbox,
+                                     ttk.Combobox, tk.Text)):
+            return
+        if self.state in ("recording", "paused"):
+            self.on_stop()
+
+    # ---- F3：录制中窗口半透明（弱化工具条存在感） ----
+    def _set_recording_alpha(self, recording):
+        """recording=True 进入半透明；False 恢复不透明。
+        配置项 record_alpha=0 表示不启用（默认 0.4）"""
+        try:
+            if recording and self.record_alpha > 0:
+                self.attributes("-alpha", self.record_alpha)
+            else:
+                self.attributes("-alpha", 1.0)
+        except Exception:
+            pass
+
+    # ---- N3：定时停止（分钟，0=不限），持久化到 config ----
+    def _on_limit_change(self):
+        try:
+            val = max(0, int(self.limit_var.get().strip() or "0"))
+        except ValueError:
+            val = 0
+        self.max_minutes = val
+        self.limit_var.set(str(val))
+        cfg = load_config()
+        cfg["max_minutes"] = val
+        save_config(cfg)
+
+    # ---- N2：区域记忆（上次框选逻辑坐标，本次会话内复用） ----
+    def _refresh_scope_values(self):
+        vals = ["全屏", "区域"]
+        if self.last_region_logic:
+            vals.append("区域(上次)")
+        self.scope_box.config(values=vals)
+
+    # ---- N6：已录字节统计（已完成段 + 当前段） ----
+    def _recorded_size_text(self):
+        eng = self.engine
+        if not eng:
+            return ""
+        total = 0
+        try:
+            for s in list(eng.segments):
+                for k in ("v", "a"):
+                    p = s.get(k)
+                    if p and os.path.exists(p):
+                        total += os.path.getsize(p)
+            cur = eng.cur
+            if cur:
+                for k in ("v_file", "a_file"):
+                    p = cur.get(k)
+                    if p and os.path.exists(p):
+                        total += os.path.getsize(p)
+        except Exception:
+            return ""
+        mb = total / 1024 / 1024
+        return "{:.2f} GB".format(mb / 1024) if mb >= 1024 else "{:.1f} MB".format(mb)
 
     # ---- 输出目录 ----
     def on_change_dir(self):
@@ -972,13 +1073,22 @@ class RecorderApp(tk.Tk):
         pw = get_password(self)
         if not pw:
             return
-        # 区域模式：先框选（每次开始都重新框选，全屏模式直接用全屏）
+        # 区域模式：先框选；「区域(上次)」直接复用本次会话上次框选（N2）
         self.cur_region = None
-        if self.scope_var.get() == "区域":
-            logic = self.pick_region(pw)
-            if not logic:
-                self.status_lbl.config(text="已取消区域选择")
-                return
+        scope = self.scope_var.get()
+        if scope in ("区域", "区域(上次)"):
+            if scope == "区域":
+                logic = self.pick_region(pw)
+                if not logic:
+                    self.status_lbl.config(text="已取消区域选择")
+                    return
+                self.last_region_logic = logic
+                self._refresh_scope_values()
+            else:
+                logic = self.last_region_logic
+                if not logic:
+                    self.status_lbl.config(text="暂无上次区域，请先用「区域」框选一次")
+                    return
             self.cur_region = self._to_physical(logic)
             if not self.cur_region:
                 return
@@ -1036,6 +1146,8 @@ class RecorderApp(tk.Tk):
         self.state = "recording"
         log.info("进入录制态")
         self._last_disk_check = time.monotonic()
+        self._last_size_check = 0.0     # 让 N6 立即刷新一次
+        self._set_recording_alpha(True)     # F3
         self.status_lbl.config(text="录制中（窗口保持显示，可手动最小化；工具条会被录入请注意）")
         notify("录屏已开始", "正在录制，点「停止」结束")
         self._refresh_buttons()
@@ -1063,14 +1175,15 @@ class RecorderApp(tk.Tk):
         self.worker_queue.put(("resumed", ok))
 
     # ---- 停止 ----
-    def on_stop(self, auto=False):
-        log.info("停止录制%s", "（磁盘守护自动触发）" if auto else "（手动）")
+    def on_stop(self, auto=False, reason=""):
+        log.info("停止录制（%s）", reason or ("自动" if auto else "手动"))
         self.state = "merging"
         self._refresh_buttons()
         self.status_lbl.config(text="正在合成视频，请稍候…")
         self.dot.config(fg=self.YELLOW)
+        self._set_recording_alpha(False)        # F3：恢复不透明
         if auto:
-            notify("磁盘空间不足", "已自动安全停止并合成")
+            notify("录屏已自动停止", reason or "已自动安全停止并合成")
         out_name = timestamp_name() + ".mp4"
         out_path = os.path.join(self.output_dir, out_name)
         threading.Thread(target=self._stop_worker, args=(out_path,), daemon=True).start()
@@ -1092,6 +1205,20 @@ class RecorderApp(tk.Tk):
             self.time_lbl.config(text=fmt_time(self.engine.elapsed()))
             self._blink_on = not self._blink_on
             self.dot.config(fg=self.RED if self._blink_on else "#7f1d1d")
+            # N6：每 2 秒刷新一次已录大小（避免频繁 IO）
+            now = time.monotonic()
+            if now - self._last_size_check >= 2.0:
+                self._last_size_check = now
+                self.status_lbl.config(
+                    text="录制中 · 已录 {}（可手动最小化窗口）".format(
+                        self._recorded_size_text() or "…"))
+            # N3：定时停止（0=不限）
+            if self.max_minutes > 0 and \
+                    self.engine.elapsed() >= self.max_minutes * 60:
+                self.status_lbl.config(text="已达设定时长 {} 分钟，自动停止…".format(
+                    self.max_minutes))
+                self.on_stop(auto=True, reason="已达设定录制时长 {} 分钟".format(
+                    self.max_minutes))
         elif self.state in ("countdown", "starting"):
             # 议题三D：预热阶段黄点闪烁（ffmpeg 已就绪，画面已在录制）
             self._blink_on = not self._blink_on
@@ -1103,7 +1230,7 @@ class RecorderApp(tk.Tk):
                 try:
                     if shutil.disk_usage(self.output_dir).free < DISK_GUARD_BYTES:
                         self.status_lbl.config(text="磁盘不足 1GB，自动停止…")
-                        self.on_stop(auto=True)
+                        self.on_stop(auto=True, reason="磁盘空间不足")
                 except Exception:
                     pass
         elif self.state == "paused":
@@ -1127,10 +1254,12 @@ class RecorderApp(tk.Tk):
                 messagebox.showerror("启动失败", self.engine.last_error or "未知错误", parent=self)
         elif tag == "paused":
             self.state = "paused"
+            self._set_recording_alpha(False)    # F3：暂停时恢复，方便操作
             self.status_lbl.config(text="已暂停（点「继续」接着录，或点「停止」合成）")
         elif tag == "resumed":
             if val:
                 self.state = "recording"
+                self._set_recording_alpha(True)     # F3：继续录制再半透明
                 self.status_lbl.config(text="录制中（窗口保持显示，可手动最小化）")
             else:
                 self.state = "paused"
@@ -1139,6 +1268,7 @@ class RecorderApp(tk.Tk):
             self.state = "idle"
             self.time_lbl.config(text="00:00:00")
             self.dot.config(fg=self.GRAY)
+            self._set_recording_alpha(False)    # F3：停止后恢复不透明
             self.refresh_mic_devices()      # 蓝牙等设备可能插拔，回到 idle 刷新列表
             self.deiconify()            # 若用户手动最小化了，唤回展示收尾面板
             self.lift()
