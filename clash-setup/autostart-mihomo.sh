@@ -21,9 +21,9 @@ for i in $(seq 1 30); do
   sleep 2
 done
 
-# 停旧 + 启动（9>&- 关闭锁描述符，防止 mihomo 继承后永久持有操作锁）
+# 停旧 + 启动（9>&- 关闭锁描述符防锁继承；>> O_APPEND 追加，配合看门狗 copytruncate 截断无稀疏空洞）
 pkill -x mihomo 2>/dev/null || true; sleep 1
-nohup "$BIN" -d "$DIR" > "$LOG" 2>&1 9>&- &
+nohup "$BIN" -d "$DIR" >> "$LOG" 2>&1 9>&- &
 echo $! > "$PIDF"
 
 # 等待进程存活且 9090 监听（最多15秒，双重确认防端口被占误判）

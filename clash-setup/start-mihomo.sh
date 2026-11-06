@@ -18,7 +18,7 @@ rm -f "$STOPMARK"
 
 # 检测是否已运行（以进程身份判定：9090 端口可能被其他程序占用，不能作为存活依据）
 if pgrep -x mihomo >/dev/null 2>&1; then
-  echo "⚠️ mihomo 已在运行（9090 已监听）"
+  echo "⚠️ mihomo 已在运行（进程存活）"
   r=""
   if [ -n "$DISPLAY" ] && command -v zenity >/dev/null 2>&1; then
     zerr=$(zenity --question --title="mihomo 已运行" --text="mihomo 已在运行。是否重启？" --ok-label="重启" --cancel-label="取消" 2>&1) && r="y"
@@ -69,8 +69,8 @@ for p in 7890 9090; do
   fi
 done
 
-# 启动（9>&- 关闭锁描述符，防止 mihomo 继承后永久持有操作锁）
-nohup "$BIN" -d "$DIR" > "$LOG" 2>&1 9>&- &
+# 启动（9>&- 关闭锁描述符防锁继承；>> O_APPEND 追加，配合看门狗 copytruncate 截断无稀疏空洞）
+nohup "$BIN" -d "$DIR" >> "$LOG" 2>&1 9>&- &
 echo $! > "$PIDF"
 sleep 2
 

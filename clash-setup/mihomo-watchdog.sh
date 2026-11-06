@@ -16,9 +16,10 @@ flock -w 20 9 || exit 0
 # 1) 用户主动停止过 → 不动
 [ -f "$STOPMARK" ] && exit 0
 
-# 日志防膨胀：>10MB 保留尾部1MB（mihomo 每条连接写一行日志，长期运行会累积）
+# 日志防膨胀：>10MB 保留尾部1MB（copytruncate 方式：保持 inode 不变，
+# 运行中的 mihomo fd 不受影响；配合启动处的 >> O_APPEND 追加模式无稀疏空洞）
 if [ -f "$LOG" ] && [ "$(stat -c%s "$LOG" 2>/dev/null || echo 0)" -gt 10485760 ]; then
-  tail -c 1048576 "$LOG" > "$LOG.tmp.$$" && mv "$LOG.tmp.$$" "$LOG"
+  tail -c 1048576 "$LOG" > "$LOG.tmp.$$" && cat "$LOG.tmp.$$" > "$LOG" && rm -f "$LOG.tmp.$$"
 fi
 
 set_proxy_manual() {
