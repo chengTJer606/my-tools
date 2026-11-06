@@ -7,6 +7,7 @@ PIDF="$HOME/clash-setup/mihomo.pid"
 STOPMARK="$DIR/.user-stopped"
 
 if [ ! -x "$BIN" ]; then echo "❌ 未找到 mihomo: $BIN"; read -rp "按回车关闭"; exit 1; fi
+for cmd in curl ss gsettings pgrep; do command -v "$cmd" >/dev/null 2>&1 || { echo "❌ 缺少依赖命令: $cmd"; read -rp "按回车关闭"; exit 1; }; done
 
 # 全局操作锁：与开机自启/看门狗/重复双击串行，杜绝并发互杀（19:58 双实例事故的根因之一）
 exec 9>/tmp/mihomo-control.lock
@@ -15,8 +16,8 @@ flock -w 30 9 || { echo "⚠️ 另一个启停操作正在进行，请稍候重
 # 用户主动启动 → 清除「主动停止」标记，看门狗恢复工作
 rm -f "$STOPMARK"
 
-# 检测是否已运行
-if ss -tln 2>/dev/null | grep -q ":9090"; then
+# 检测是否已运行（以进程身份判定：9090 端口可能被其他程序占用，不能作为存活依据）
+if pgrep -x mihomo >/dev/null 2>&1; then
   echo "⚠️ mihomo 已在运行（9090 已监听）"
   r=""
   if [ -n "$DISPLAY" ] && command -v zenity >/dev/null 2>&1; then
@@ -32,12 +33,16 @@ if ss -tln 2>/dev/null | grep -q ":9090"; then
   if [ "$r" != "y" ] && [ "$r" != "Y" ]; then
     echo "已取消（mihomo 继续运行）"
     # 即使不重启，也顺手修复「内核在跑但系统代理没设上」的异常状态
+    # 快速预检一次（避免前台长跑 ensure-proxy 持锁阻塞 stop/watchdog 长达10分钟）
     if [ "$(gsettings get org.gnome.system.proxy mode 2>/dev/null)" != "'manual'" ]; then
       echo "检测到系统代理未设置，正在尝试补设..."
-      if bash "$HOME/clash-setup/ensure-proxy.sh" 9>&-; then
+      c=$(curl -s --max-time 6 --proxy http://127.0.0.1:7890 -o /dev/null -w "%{http_code}" http://www.gstatic.com/generate_204 2>/dev/null)
+      if [ "$c" = "204" ]; then
+        bash "$HOME/clash-setup/ensure-proxy.sh" 9>&-
         echo "✅ 已补设系统代理 127.0.0.1:7890"
       else
-        echo "⚠️ 节点暂不通，看门狗每分钟会自动重试补设"
+        echo "⚠️ 节点暂不通，已转入后台持续补设（看门狗每分钟也会兜底）"
+        nohup bash "$HOME/clash-setup/ensure-proxy.sh" >> "$LOG" 2>&1 9>&- &
       fi
     else
       echo "系统代理正常（manual 127.0.0.1:7890）"
@@ -46,9 +51,13 @@ if ss -tln 2>/dev/null | grep -q ":9090"; then
   fi
 fi
 
-# 停旧进程（PID文件 + pkill 兜底）
-if [ -f "$PIDF" ] && kill -0 "$(cat "$PIDF")" 2>/dev/null; then
-  kill "$(cat "$PIDF")" 2>/dev/null || true; sleep 1
+# 停旧进程（PID文件需校验进程身份[防PID复用误杀] + pkill 兜底）
+if [ -f "$PIDF" ]; then
+  pid=$(cat "$PIDF" 2>/dev/null)
+  if [ -n "$pid" ] && [ "$(cat /proc/$pid/comm 2>/dev/null)" = "mihomo" ]; then
+    kill "$pid" 2>/dev/null || true; sleep 1
+  fi
+  rm -f "$PIDF"
 fi
 pkill -x mihomo 2>/dev/null || true
 sleep 1
@@ -65,8 +74,8 @@ nohup "$BIN" -d "$DIR" > "$LOG" 2>&1 9>&- &
 echo $! > "$PIDF"
 sleep 2
 
-# 启动验证
-if ss -tln 2>/dev/null | grep -q ":9090"; then
+# 启动验证（进程身份+端口双重确认，防 9090 被其他程序占用时误判成功）
+if pgrep -x mihomo >/dev/null 2>&1 && ss -tln 2>/dev/null | grep -q ":9090"; then
   echo "✅ mihomo 已启动，PID: $(cat "$PIDF")"
   echo "检测节点连通性（决定是否设系统代理）..."
   ok=0
@@ -95,4 +104,6 @@ if ss -tln 2>/dev/null | grep -q ":9090"; then
 else
   echo "❌ mihomo 启动失败，最近日志："
   tail -5 "$LOG" 2>/dev/null
+  echo "端口占用情况（若非 mihomo 占用需手动处理）："
+  ss -tlnp 2>/dev/null | grep -E ':7890 |:9090 ' || echo "  （7890/9090 空闲）"
 fi

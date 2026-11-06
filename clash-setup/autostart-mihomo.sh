@@ -11,8 +11,8 @@ flock -w 60 9 || exit 1
 # 开机=新会话，清除上轮「主动停止」标记，恢复自动运行
 rm -f "$STOPMARK"
 
-# 已运行则跳过
-ss -tln 2>/dev/null | grep -q ":9090" && exit 0
+# 已运行则跳过（以进程身份判定：9090 端口可能被其他程序占用）
+pgrep -x mihomo >/dev/null 2>&1 && exit 0
 
 # 等待网络就绪（默认路由存在且能 ping 通公网 DNS，最多 60 秒）
 # 关键修复：开机时网络就绪晚于自启，直接检测节点必然失败 → 代理漏设
@@ -26,9 +26,9 @@ pkill -x mihomo 2>/dev/null || true; sleep 1
 nohup "$BIN" -d "$DIR" > "$LOG" 2>&1 9>&- &
 echo $! > "$PIDF"
 
-# 等待 9090 监听（最多15秒）
-for i in $(seq 1 15); do ss -tln 2>/dev/null | grep -q ":9090" && break; sleep 1; done
-ss -tln 2>/dev/null | grep -q ":9090" || exit 1
+# 等待进程存活且 9090 监听（最多15秒，双重确认防端口被占误判）
+for i in $(seq 1 15); do pgrep -x mihomo >/dev/null 2>&1 && ss -tln 2>/dev/null | grep -q ":9090" && break; sleep 1; done
+pgrep -x mihomo >/dev/null 2>&1 && ss -tln 2>/dev/null | grep -q ":9090" || exit 1
 
 # 节点通才设系统代理（不通则保持none，浏览器直连，不崩）
 # 检测目标用 generate_204（轻量，mihomo 健康检查同款），比整页 google.com 快且稳

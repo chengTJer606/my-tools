@@ -68,19 +68,30 @@ fi
 [ -z "$SUB_URL" ] && { echo "未提供订阅链接，退出"; exit 1; }
 echo "使用 [$SUB_NAME]: ${SUB_URL:0:60}..."
 
+# 依赖预检
+python3 -c "import yaml" 2>/dev/null || { echo "❌ 缺少 python3-yaml（sudo apt install python3-yaml）"; exit 1; }
+SUBNEW=$(mktemp /tmp/sub.new.XXXXXX) || { echo "❌ mktemp 失败"; exit 1; }
+trap 'rm -f "$SUBNEW"' EXIT
+
 echo "[1/3] 拉取订阅..."
-http_code=$(curl -k -sS --max-time 60 -A "clash.meta/v1.19.30" "$SUB_URL" -o /tmp/sub.new -w "%{http_code}" 2>/dev/null) || http_code="000"
-echo "  HTTP $http_code  size=$(stat -c%s /tmp/sub.new 2>/dev/null || echo 0)"
-if [ "$http_code" != "200" ] || [ ! -s /tmp/sub.new ]; then
+http_code=$(curl -k -sS --max-time 60 -A "clash.meta/v1.19.30" "$SUB_URL" -o "$SUBNEW" -w "%{http_code}" 2>/dev/null) || http_code="000"
+echo "  HTTP $http_code  size=$(stat -c%s "$SUBNEW" 2>/dev/null || echo 0)"
+if [ "$http_code" != "200" ] || [ ! -s "$SUBNEW" ]; then
   echo "❌ 拉取失败（HTTP=$http_code）。请检查：订阅链接是否正确/网络是否通/是否已续订"
   exit 1
 fi
 
-echo "[2/3] 精简配置（节点域名强制system DNS）..."
+echo "[2/3] 精简配置（先备份+原子写入+格式校验）..."
+export SUBNEW
 python3 - <<'PY'
-import yaml, os
+import yaml, os, shutil, time, glob
 cfg = os.path.join(os.environ['HOME'], '.config/mihomo/config.yaml')
-d = yaml.safe_load(open('/tmp/sub.new'))
+subnew = os.environ['SUBNEW']
+d = yaml.safe_load(open(subnew))
+# 格式校验：异常订阅（base64/非clash结构）不得触碰现有配置
+if not isinstance(d, dict) or not isinstance(d.get('proxies'), list) or not d['proxies']:
+    print("  ❌ 订阅格式异常（不含有效 proxies 列表），现有配置未改动")
+    raise SystemExit(1)
 proxies = d['proxies']
 all_names = [p['name'] for p in proxies]
 real = [n for n in all_names if '剩余流量' not in n and '套餐到期' not in n]
@@ -105,7 +116,16 @@ out = {
     'rules': ['GEOIP,CN,DIRECT', 'MATCH,节点选择'],
     'external-controller': '127.0.0.1:9090', 'external-ui': 'ui',
 }
-yaml.safe_dump(out, open(cfg, 'w'), allow_unicode=True, sort_keys=False)
+# 备份现有配置（保留最近5个），再原子替换（防写一半损坏）
+bak = f"{cfg}.bak.{time.strftime('%Y%m%d%H%M%S')}"
+if os.path.exists(cfg):
+    shutil.copy2(cfg, bak)
+tmp = f"{cfg}.tmp"
+yaml.safe_dump(out, open(tmp, 'w'), allow_unicode=True, sort_keys=False)
+os.replace(tmp, cfg)
+for old in sorted(glob.glob(cfg + '.bak.*'))[:-5]:
+    os.remove(old)
+print(f"  已备份: {os.path.basename(bak) if os.path.exists(bak) else '无（首次）'}（保留最近5个）")
 print(f"  精简完成: 节点={len(proxies)} 节点域名system解析={len(servers)}")
 PY
 

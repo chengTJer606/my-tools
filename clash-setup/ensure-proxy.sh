@@ -25,8 +25,8 @@ LOCK=/tmp/ensure-proxy.lock
 exec 9>"$LOCK" && flock -n 9 || exit 0
 
 for i in $(seq 1 44); do
-  # mihomo 代理端口不在了 → 无需补设，退出
-  ss -tln 2>/dev/null | grep -q ':7890 ' || { echo "mihomo 未运行，退出"; exit 0; }
+  # mihomo 进程不在了 → 无需补设，退出（以进程身份判定，非端口）
+  pgrep -x mihomo >/dev/null 2>&1 || { echo "mihomo 未运行，退出"; exit 0; }
   if node_ok; then
     set_proxy_manual
     echo "✅ 节点连通，系统代理已设为 127.0.0.1:7890"
