@@ -1,0 +1,8 @@
+# clash-setup 专属忽略（仓库为公开仓库，敏感与大文件不入库）
+# mihomo 内核二进制（45MB，官网可下载）
+mihomo
+# 运行态文件
+mihomo.log
+mihomo.pid
+# 订阅链接（含 token，泄露=账号被盗用）
+subs.list
