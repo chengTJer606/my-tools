@@ -12,6 +12,11 @@ flock -n 8 || { echo "⚠️ 另一个订阅更新正在进行，请稍候"; exi
 PY=python3
 $PY -c "import yaml" 2>/dev/null || PY=/usr/bin/python3
 
+# 代理连通性探测：必须绕过环境变量里的 http_proxy，否则 curl 可能自己走系统代理造成假阳性
+node_ok() {
+  [ "$(curl -s --noproxy '' --max-time 8 -x http://127.0.0.1:7890 -o /dev/null -w '%{http_code}' https://www.google.com/generate_204 2>/dev/null)" = "204" ]
+}
+
 # 改subs.list中某URL对应的名称
 rename_in_list() {
   "$PY" - "$LIST" "$SUB_URL" "$1" <<'PY'
@@ -90,8 +95,15 @@ if [ "$http_code" != "200" ] || [ ! -s "$SUBNEW" ]; then
 fi
 
 echo "[2/4] 精简配置（先备份+原子写入+格式校验）..."
-# 记录"本次更新前"的最近备份（按文件名排序，时间戳有序），供失败回滚使用
-PREV_CFG=$(ls -1 "$HOME/.config/mihomo"/config.yaml.bak.[0-9]* 2>/dev/null | sort | tail -1)
+# 更新前快照：直接复制当前 config 作为回滚基准。
+# 不能用 "ls -t *.bak.* | head -1" 猜备份——订阅每次拉取可能轮换节点域名，
+# 旧备份里的 token/uuid 可能已失效，回滚过去反而更坏。
+PREV_CFG="$HOME/.config/mihomo/config.yaml.prev-update"
+if [ -f "$HOME/.config/mihomo/config.yaml" ]; then
+  cp -f "$HOME/.config/mihomo/config.yaml" "$PREV_CFG" && chmod 600 "$PREV_CFG"
+else
+  rm -f "$PREV_CFG"
+fi
 export SUBNEW
 "$PY" - <<'PY'
 import yaml, os, shutil, time, glob
@@ -125,10 +137,22 @@ if servers:
             fip.append(h)
     dns['fake-ip-filter'] = fip
     # 清除订阅自带的 nameserver-policy 对节点域名的劫持（第三方 DoH 不可用即全断，且无回退）
+    # 订阅可能用 "+.example.com" / "*.example.com" 通配写法，需归一化后匹配，不能只比全等
+    def _hits(key, hosts):
+        k = key.strip().lower()
+        if k.startswith(('geosite:', 'rule-set:', 'ruleset:')):
+            return False
+        for pre in ('+.', '*.', '.'):
+            if k.startswith(pre):
+                k = k[len(pre):]
+                break
+        if not k or '.' not in k:
+            return False
+        return any(h == k or h.endswith('.' + k) for h in hosts)
     pol = dns.get('nameserver-policy')
     if isinstance(pol, dict):
         for h in list(pol.keys()):
-            if h in servers or h == 'geosite:cn' and False:
+            if _hits(h, servers):
                 pol.pop(h, None)
         if not pol:
             dns.pop('nameserver-policy', None)
@@ -187,7 +211,24 @@ else
   sleep 1; bash "$HOME/clash-setup/start-mihomo.sh" 8>&- < /dev/null
 fi
 sleep 2
-echo
+# 生效后连通性验证：订阅可能"语法正确但节点全不可用"，此时热重载会让境外流量全断，
+# 必须在这里兜住——连续两次探测失败就回滚到更新前配置并再次热重载。
+if ! node_ok; then
+  sleep 3
+  if ! node_ok; then
+    echo "  ⚠️ 新订阅节点全部不可用，回滚到更新前配置..."
+    if [ -n "$PREV_CFG" ] && [ -f "$PREV_CFG" ]; then
+      cp -f "$PREV_CFG" "$HOME/.config/mihomo/config.yaml"; chmod 600 "$HOME/.config/mihomo/config.yaml"
+      curl -s --max-time 15 -X PUT 'http://127.0.0.1:9090/configs?force=true' -H 'Content-Type: application/json' -d '{}' >/dev/null 2>&1 || true
+      sleep 2
+      node_ok && echo "  ✅ 已回滚，代理恢复可用" || echo "  ❌ 回滚后仍不通，请检查节点/网络，或 bash ~/clash-setup/start-mihomo.sh 重启"
+    else
+      echo "  ⚠️ 无可用回滚快照，请手动检查"
+    fi
+    exit 1
+  fi
+fi
+echo "  ✅ 代理实测连通（google generate_204 = 204）"
 echo "✅ 完成。打开 http://127.0.0.1:9090/ui 选节点"
 echo "查看用量: 双击桌面「mihomo-查看用量」或 bash ~/clash-setup/sub-info.sh"
 echo "管理订阅名称: 编辑 ~/clash-setup/subs.list"

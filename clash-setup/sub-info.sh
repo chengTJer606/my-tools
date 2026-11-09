@@ -42,7 +42,7 @@ def h(b):
     return f'{b} B'
 lines=[f'已用: {h(used)}', f'剩余: {h(total-used)}', f'总量: {h(total)}']
 if total: lines.append(f'使用率: {used/total*100:.1f}%')
-lines.append(f'到期: {datetime.datetime.fromtimestamp(int(exp)).strftime("%Y-%m-%d")}' if exp else '到期: 长期有效')
+lines.append(f'到期: {datetime.datetime.fromtimestamp(int(exp)).strftime("%Y-%m-%d")}' if exp and int(exp) > 0 else '到期: 长期有效')
 print('\n'.join(lines))
 PY
 )\n\n"
