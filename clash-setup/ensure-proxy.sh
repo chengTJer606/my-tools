@@ -12,12 +12,15 @@ set_proxy_manual() {
   gsettings set org.gnome.system.proxy.https port 7890
   gsettings set org.gnome.system.proxy.socks host '127.0.0.1'
   gsettings set org.gnome.system.proxy.socks port 7890
-  gsettings set org.gnome.system.proxy ignore-hosts "['localhost','127.0.0.0/8','::1','10.0.0.0/8','192.168.0.0/16']"
+  gsettings set org.gnome.system.proxy ignore-hosts "['localhost','127.0.0.0/8','::1','10.0.0.0/8','172.16.0.0/12','192.168.0.0/16']"
 }
 
+STOPMARK="$HOME/.config/mihomo/.user-stopped"
+
 node_ok() {
-  # generate_204 轻量探测（返回204即通），比重试整页 google.com 更快更稳
-  [ "$(curl -s --max-time 6 --proxy http://127.0.0.1:7890 -o /dev/null -w '%{http_code}' http://www.gstatic.com/generate_204 2>/dev/null)" = "204" ]
+  # 必须探测走 MATCH 规则的域名（google）才能验证节点真实可用；
+  # 旧的 gstatic 命中 GEOIP,CN,DIRECT，节点全挂也会假阳性
+  [ "$(curl -s --max-time 6 --noproxy '' --proxy http://127.0.0.1:7890 -o /dev/null -w '%{http_code}' https://www.google.com/generate_204 2>/dev/null)" = "204" ]
 }
 
 # 已在运行则跳过（避免 start/autostart 并发时重复补设）
@@ -25,9 +28,13 @@ LOCK=/tmp/ensure-proxy.lock
 exec 9>"$LOCK" && flock -n 9 || exit 0
 
 for i in $(seq 1 44); do
+  # 用户已主动停止 → 立即退出，绝不把系统代理写回 manual（修复与 stop 的竞态）
+  [ -f "$STOPMARK" ] && { echo "用户已主动停止，退出"; exit 0; }
   # mihomo 进程不在了 → 无需补设，退出（以进程身份判定，非端口）
   pgrep -x mihomo >/dev/null 2>&1 || { echo "mihomo 未运行，退出"; exit 0; }
   if node_ok; then
+    # 设置前再次确认停止标记，关闭检查后执行的竞态窗口
+    [ -f "$STOPMARK" ] && { echo "用户已主动停止，退出"; exit 0; }
     set_proxy_manual
     echo "✅ 节点连通，系统代理已设为 127.0.0.1:7890"
     exit 0

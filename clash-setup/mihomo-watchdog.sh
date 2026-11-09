@@ -30,11 +30,11 @@ set_proxy_manual() {
   gsettings set org.gnome.system.proxy.https port 7890
   gsettings set org.gnome.system.proxy.socks host '127.0.0.1'
   gsettings set org.gnome.system.proxy.socks port 7890
-  gsettings set org.gnome.system.proxy ignore-hosts "['localhost','127.0.0.0/8','::1','10.0.0.0/8','192.168.0.0/16']"
+  gsettings set org.gnome.system.proxy ignore-hosts "['localhost','127.0.0.0/8','::1','10.0.0.0/8','172.16.0.0/12','192.168.0.0/16']"
 }
 
 node_ok() {
-  [ "$(curl -s --max-time 6 --proxy http://127.0.0.1:7890 -o /dev/null -w '%{http_code}' http://www.gstatic.com/generate_204 2>/dev/null)" = "204" ]
+  [ "$(curl -s --max-time 6 --proxy http://127.0.0.1:7890 -o /dev/null -w '%{http_code}' https://www.google.com/generate_204 2>/dev/null)" = "204" ]
 }
 
 # 2) mihomo 未运行 → 拉起（以进程身份判定：9090 端口可能被其他程序占用，不能作为存活依据）
@@ -55,10 +55,19 @@ if ! pgrep -x mihomo >/dev/null 2>&1; then
   fi
 fi
 
-# 3) 系统代理补设：节点连通但代理不是 manual → 设上
-if [ "$(gsettings get org.gnome.system.proxy mode 2>/dev/null)" != "'manual'" ]; then
+# 3) 系统代理补设：完整校验(模式+三协议地址端口)，任一项不对且节点通 → 重设为正确值
+proxy_ok() {
+  [ "$(gsettings get org.gnome.system.proxy mode 2>/dev/null)" = "'manual'" ] || return 1
+  for k in http https socks; do
+    [ "$(gsettings get org.gnome.system.proxy.$k host 2>/dev/null)" = "'127.0.0.1'" ] || return 1
+    [ "$(gsettings get org.gnome.system.proxy.$k port 2>/dev/null)" = "7890" ] || return 1
+  done
+  return 0
+}
+
+if ! proxy_ok; then
   if node_ok; then
     set_proxy_manual
-    echo "$(date '+%F %T') watchdog: 检测到系统代理缺失，已自动补设 127.0.0.1:7890" >> "$LOG"
+    echo "$(date '+%F %T') watchdog: 系统代理缺失/配置不正确，已自动补设 127.0.0.1:7890" >> "$LOG"
   fi
 fi

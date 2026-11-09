@@ -1,12 +1,20 @@
 #!/usr/bin/env bash
-# 更新订阅：选订阅(可改名/加新) → 拉取 → 精简(节点域名强制system DNS) → API热重载
+# 更新订阅：选订阅(可改名/加新) → 拉取 → 精简(节点域名独立解析) → 语义校验 → API热重载
 set -e
 LIST="$HOME/clash-setup/subs.list"
 SUB_URL=""; SUB_NAME=""
 
+# 更新锁：防止重复双击并发执行互相覆盖配置
+exec 8>/tmp/mihomo-update.lock
+flock -n 8 || { echo "⚠️ 另一个订阅更新正在进行，请稍候"; exit 1; }
+
+# 解释器选择（优先当前 python3，缺 yaml 时回退系统 /usr/bin/python3）
+PY=python3
+$PY -c "import yaml" 2>/dev/null || PY=/usr/bin/python3
+
 # 改subs.list中某URL对应的名称
 rename_in_list() {
-  python3 - "$LIST" "$SUB_URL" "$1" <<'PY'
+  "$PY" - "$LIST" "$SUB_URL" "$1" <<'PY'
 import sys
 lst,url,new=sys.argv[1],sys.argv[2],sys.argv[3]
 lines=open(lst).read().splitlines()
@@ -69,21 +77,21 @@ fi
 echo "使用 [$SUB_NAME]: ${SUB_URL:0:60}..."
 
 # 依赖预检
-python3 -c "import yaml" 2>/dev/null || { echo "❌ 缺少 python3-yaml（sudo apt install python3-yaml）"; exit 1; }
+$PY -c "import yaml" 2>/dev/null || { echo "❌ 缺少 python3-yaml（sudo apt install python3-yaml）"; exit 1; }
 SUBNEW=$(mktemp /tmp/sub.new.XXXXXX) || { echo "❌ mktemp 失败"; exit 1; }
 trap 'rm -f "$SUBNEW"' EXIT
 
-echo "[1/3] 拉取订阅..."
-http_code=$(curl -k -sS --max-time 60 -A "clash.meta/v1.19.30" "$SUB_URL" -o "$SUBNEW" -w "%{http_code}" 2>/dev/null) || http_code="000"
+echo "[1/4] 拉取订阅..."
+http_code=$(curl -sS --max-time 60 -A "clash.meta/v1.19.30" "$SUB_URL" -o "$SUBNEW" -w "%{http_code}" 2>/dev/null) || http_code="000"
 echo "  HTTP $http_code  size=$(stat -c%s "$SUBNEW" 2>/dev/null || echo 0)"
 if [ "$http_code" != "200" ] || [ ! -s "$SUBNEW" ]; then
   echo "❌ 拉取失败（HTTP=$http_code）。请检查：订阅链接是否正确/网络是否通/是否已续订"
   exit 1
 fi
 
-echo "[2/3] 精简配置（先备份+原子写入+格式校验）..."
+echo "[2/4] 精简配置（先备份+原子写入+格式校验）..."
 export SUBNEW
-python3 - <<'PY'
+"$PY" - <<'PY'
 import yaml, os, shutil, time, glob
 cfg = os.path.join(os.environ['HOME'], '.config/mihomo/config.yaml')
 subnew = os.environ['SUBNEW']
@@ -94,7 +102,10 @@ if not isinstance(d, dict) or not isinstance(d.get('proxies'), list) or not d['p
     raise SystemExit(1)
 proxies = d['proxies']
 all_names = [p['name'] for p in proxies]
-real = [n for n in all_names if '剩余流量' not in n and '套餐到期' not in n]
+real = [n for n in all_names if not any(k in n for k in ['剩余流量','套餐到期','过滤掉'])]
+if not real:
+    print("  ❌ 订阅中无有效节点（全是信息条目），现有配置未改动")
+    raise SystemExit(1)
 servers = set()
 for p in proxies:
     h = str(p.get('server','')).split(':')[0]
@@ -102,7 +113,14 @@ for p in proxies:
         servers.add(h)
 dns = d.get('dns') or {'enable': True, 'enhanced-mode': 'fake-ip', 'nameserver': ['223.5.5.5','119.29.29.29']}
 if servers:
-    dns['nameserver-policy'] = {h: 'system://' for h in sorted(servers)}
+    # 节点域名走 mihomo 专用 proxy-server-nameserver（国内DoH/UDP），不再依赖系统DNS；
+    # 同时加入 fake-ip-filter，防止拿到 fake-ip 造成解析回环
+    dns['proxy-server-nameserver'] = ['https://223.5.5.5/dns-query','https://doh.pub/dns-query','223.5.5.5','119.29.29.29']
+    fip = dns.get('fake-ip-filter') or []
+    for h in sorted(servers):
+        if h not in fip:
+            fip.append(h)
+    dns['fake-ip-filter'] = fip
 out = {
     'mixed-port': d.get('mixed-port', 7890),
     'allow-lan': False, 'bind-address': '*', 'mode': 'rule', 'log-level': 'info', 'ipv6': False,
@@ -110,27 +128,39 @@ out = {
     'dns': dns,
     'proxies': proxies,
     'proxy-groups': [
-        {'name': '节点选择', 'type': 'select', 'proxies': ['自动选择'] + all_names},
-        {'name': '自动选择', 'type': 'url-test', 'proxies': real, 'url': 'http://www.gstatic.com/generate_204', 'interval': 300, 'tolerance': 50},
+        {'name': '节点选择', 'type': 'select', 'proxies': ['自动选择'] + real},
+        {'name': '自动选择', 'type': 'url-test', 'proxies': real, 'url': 'https://www.google.com/generate_204', 'interval': 300, 'tolerance': 50},
     ],
     'rules': ['GEOIP,CN,DIRECT', 'MATCH,节点选择'],
     'external-controller': '127.0.0.1:9090', 'external-ui': 'ui',
 }
+# fake-ip 使用 benchmark 保留网段（订阅默认 28.0.0.0/8 是公网段，有冲突隐患）
+dns['fake-ip-range'] = '198.18.0.0/16'
 # 备份现有配置（保留最近5个），再原子替换（防写一半损坏）
 bak = f"{cfg}.bak.{time.strftime('%Y%m%d%H%M%S')}"
 if os.path.exists(cfg):
     shutil.copy2(cfg, bak)
-tmp = f"{cfg}.tmp"
+tmp = f"{cfg}.tmp.{os.getpid()}"
 yaml.safe_dump(out, open(tmp, 'w'), allow_unicode=True, sort_keys=False)
 os.replace(tmp, cfg)
 for old in sorted(glob.glob(cfg + '.bak.*'))[:-5]:
     os.remove(old)
 print(f"  已备份: {os.path.basename(bak) if os.path.exists(bak) else '无（首次）'}（保留最近5个）")
-print(f"  精简完成: 节点={len(proxies)} 节点域名system解析={len(servers)}")
+print(f"  精简完成: 节点={len(proxies)} 可选真实节点={len(real)} 节点域名独立解析={len(servers)}")
 PY
 
-echo "[3/3] 热重载mihomo（不重启进程，不碰gsettings，不崩溃）..."
-if curl -s -X PUT 'http://127.0.0.1:9090/configs?force=true' -H 'Content-Type: application/json' -d '{}' -w "  reload=%{http_code}\n" 2>/dev/null | grep -q 204; then
+echo "[3/4] 语义校验（mihomo -t）..."
+if ! "$HOME/.local/bin/mihomo" -t -d "$HOME/.config/mihomo" > /tmp/mihomo-config-test.log 2>&1; then
+  echo "  ❌ 新配置未通过语义校验，自动回滚上一个备份..."
+  lastbak=$(ls -t "$HOME/.config/mihomo"/config.yaml.bak.* 2>/dev/null | head -1)
+  if [ -n "$lastbak" ]; then cp -f "$lastbak" "$HOME/.config/mihomo/config.yaml"; echo "  已回滚: $(basename "$lastbak")"; fi
+  grep -E "error|failed" /tmp/mihomo-config-test.log | tail -3
+  exit 1
+fi
+echo "  ✅ 语义校验通过"
+
+echo "[4/4] 热重载mihomo（不重启进程，不碰gsettings，不崩溃）..."
+if curl -s --max-time 15 -X PUT 'http://127.0.0.1:9090/configs?force=true' -H 'Content-Type: application/json' -d '{}' -w "  reload=%{http_code}\n" 2>/dev/null | grep -q "reload=204"; then
   echo "  热重载成功"
 else
   echo "  热重载失败，尝试重启mihomo..."

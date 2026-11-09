@@ -34,9 +34,11 @@ if pgrep -x mihomo >/dev/null 2>&1; then
     echo "已取消（mihomo 继续运行）"
     # 即使不重启，也顺手修复「内核在跑但系统代理没设上」的异常状态
     # 快速预检一次（避免前台长跑 ensure-proxy 持锁阻塞 stop/watchdog 长达10分钟）
-    if [ "$(gsettings get org.gnome.system.proxy mode 2>/dev/null)" != "'manual'" ]; then
+    if [ "$(gsettings get org.gnome.system.proxy mode 2>/dev/null)" != "'manual'" ] \
+       || [ "$(gsettings get org.gnome.system.proxy.http port 2>/dev/null)" != "7890" ] \
+       || [ "$(gsettings get org.gnome.system.proxy.https port 2>/dev/null)" != "7890" ]; then
       echo "检测到系统代理未设置，正在尝试补设..."
-      c=$(curl -s --max-time 6 --proxy http://127.0.0.1:7890 -o /dev/null -w "%{http_code}" http://www.gstatic.com/generate_204 2>/dev/null)
+      c=$(curl -s --max-time 6 --proxy http://127.0.0.1:7890 -o /dev/null -w "%{http_code}" https://www.google.com/generate_204 2>/dev/null)
       if [ "$c" = "204" ]; then
         bash "$HOME/clash-setup/ensure-proxy.sh" 9>&-
         echo "✅ 已补设系统代理 127.0.0.1:7890"
@@ -80,7 +82,7 @@ if pgrep -x mihomo >/dev/null 2>&1 && ss -tln 2>/dev/null | grep -q ":9090"; the
   echo "检测节点连通性（决定是否设系统代理）..."
   ok=0
   for i in $(seq 1 4); do
-    c=$(curl -s --max-time 6 --proxy http://127.0.0.1:7890 -o /dev/null -w "%{http_code}" http://www.gstatic.com/generate_204 2>/dev/null)
+    c=$(curl -s --max-time 6 --proxy http://127.0.0.1:7890 -o /dev/null -w "%{http_code}" https://www.google.com/generate_204 2>/dev/null)
     [ "$c" = "204" ] && { ok=1; break; }
     sleep 2
   done
@@ -92,7 +94,7 @@ if pgrep -x mihomo >/dev/null 2>&1 && ss -tln 2>/dev/null | grep -q ":9090"; the
     gsettings set org.gnome.system.proxy.https port 7890
     gsettings set org.gnome.system.proxy.socks host '127.0.0.1'
     gsettings set org.gnome.system.proxy.socks port 7890
-    gsettings set org.gnome.system.proxy ignore-hosts "['localhost','127.0.0.0/8','::1','10.0.0.0/8','192.168.0.0/16']"
+    gsettings set org.gnome.system.proxy ignore-hosts "['localhost','127.0.0.0/8','::1','10.0.0.0/8','172.16.0.0/12','192.168.0.0/16']"
     echo "✅ 系统代理已设为 127.0.0.1:7890（节点通，浏览器/微信/QQ 自动走代理）"
   else
     echo "⚠️ 节点暂不通，已转入后台持续检测（约10分钟），连通后自动补设系统代理"

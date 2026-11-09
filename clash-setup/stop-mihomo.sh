@@ -26,7 +26,11 @@ if [ "$stopped" = "0" ] && pgrep -x mihomo >/dev/null 2>&1; then
   sleep 1
 fi
 
-# 验证
+# 验证（先给 SIGTERM 最多5秒优雅退出，再考虑强杀，避免秒变 SIGKILL）
+for i in $(seq 1 5); do
+  pgrep -x mihomo >/dev/null 2>&1 || break
+  sleep 1
+done
 if pgrep -x mihomo >/dev/null 2>&1; then
   echo "⚠️ 仍有 mihomo 进程，强杀..."; pkill -9 -x mihomo 2>/dev/null || true; sleep 1
 fi
