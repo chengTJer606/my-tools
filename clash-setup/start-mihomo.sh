@@ -10,7 +10,7 @@ if [ ! -x "$BIN" ]; then echo "❌ 未找到 mihomo: $BIN"; read -rp "按回车�
 for cmd in curl ss gsettings pgrep; do command -v "$cmd" >/dev/null 2>&1 || { echo "❌ 缺少依赖命令: $cmd"; read -rp "按回车关闭"; exit 1; }; done
 
 # 全局操作锁：与开机自启/看门狗/重复双击串行，杜绝并发互杀（19:58 双实例事故的根因之一）
-exec 9>/tmp/mihomo-control.lock
+exec 9>"${XDG_RUNTIME_DIR:-/tmp}/mihomo-control.lock"
 flock -w 30 9 || { echo "⚠️ 另一个启停操作正在进行，请稍候重试"; read -rp "按回车关闭"; exit 1; }
 
 # 用户主动启动 → 清除「主动停止」标记，看门狗恢复工作
@@ -28,23 +28,29 @@ if pgrep -x mihomo >/dev/null 2>&1; then
       read -rp "是否重启？[y/N]: " r
     fi
   else
-    read -rp "是否重启？[y/N]: " r
+    # 非交互环境（订阅更新兜底/后台调用）无 tty 时无法确认，直接按"重启"处理，避免卡住或静默取消
+    if [ ! -t 0 ]; then r="y"; else read -rp "是否重启？[y/N]: " r; fi
   fi
   if [ "$r" != "y" ] && [ "$r" != "Y" ]; then
     echo "已取消（mihomo 继续运行）"
     # 即使不重启，也顺手修复「内核在跑但系统代理没设上」的异常状态
     # 快速预检一次（避免前台长跑 ensure-proxy 持锁阻塞 stop/watchdog 长达10分钟）
-    if [ "$(gsettings get org.gnome.system.proxy mode 2>/dev/null)" != "'manual'" ] \
-       || [ "$(gsettings get org.gnome.system.proxy.http port 2>/dev/null)" != "7890" ] \
-       || [ "$(gsettings get org.gnome.system.proxy.https port 2>/dev/null)" != "7890" ]; then
+    # 完整校验：模式 + http/https/socks 的 host 与 port，任一项不对就补设（原先只看 mode 会漏判）
+    _proxy_bad=0
+    [ "$(gsettings get org.gnome.system.proxy mode 2>/dev/null)" = "'manual'" ] || _proxy_bad=1
+    for k in http https socks; do
+      [ "$(gsettings get org.gnome.system.proxy.$k host 2>/dev/null)" = "'127.0.0.1'" ] || _proxy_bad=1
+      [ "$(gsettings get org.gnome.system.proxy.$k port 2>/dev/null)" = "7890" ] || _proxy_bad=1
+    done
+    if [ "$_proxy_bad" = "1" ]; then
       echo "检测到系统代理未设置，正在尝试补设..."
-      c=$(curl -s --max-time 6 --proxy http://127.0.0.1:7890 -o /dev/null -w "%{http_code}" https://www.google.com/generate_204 2>/dev/null)
+      c=$(curl -s --noproxy '' --max-time 6 --proxy http://127.0.0.1:7890 -o /dev/null -w "%{http_code}" https://www.google.com/generate_204 2>/dev/null)
       if [ "$c" = "204" ]; then
         bash "$HOME/clash-setup/ensure-proxy.sh" 9>&-
         echo "✅ 已补设系统代理 127.0.0.1:7890"
       else
         echo "⚠️ 节点暂不通，已转入后台持续补设（看门狗每分钟也会兜底）"
-        nohup bash "$HOME/clash-setup/ensure-proxy.sh" >> "$LOG" 2>&1 9>&- &
+        nohup bash "$HOME/clash-setup/ensure-proxy.sh" >> "$LOG" 2>&1 9>&- 8>&- &
       fi
     else
       echo "系统代理正常（manual 127.0.0.1:7890）"
@@ -72,7 +78,7 @@ for p in 7890 9090; do
 done
 
 # 启动（9>&- 关闭锁描述符防锁继承；>> O_APPEND 追加，配合看门狗 copytruncate 截断无稀疏空洞）
-nohup "$BIN" -d "$DIR" >> "$LOG" 2>&1 9>&- &
+nohup "$BIN" -d "$DIR" >> "$LOG" 2>&1 9>&- 8>&- &
 echo $! > "$PIDF"
 sleep 2
 
@@ -82,7 +88,7 @@ if pgrep -x mihomo >/dev/null 2>&1 && ss -tln 2>/dev/null | grep -q ":9090"; the
   echo "检测节点连通性（决定是否设系统代理）..."
   ok=0
   for i in $(seq 1 4); do
-    c=$(curl -s --max-time 6 --proxy http://127.0.0.1:7890 -o /dev/null -w "%{http_code}" https://www.google.com/generate_204 2>/dev/null)
+    c=$(curl -s --noproxy '' --max-time 6 --proxy http://127.0.0.1:7890 -o /dev/null -w "%{http_code}" https://www.google.com/generate_204 2>/dev/null)
     [ "$c" = "204" ] && { ok=1; break; }
     sleep 2
   done
@@ -99,7 +105,7 @@ if pgrep -x mihomo >/dev/null 2>&1 && ss -tln 2>/dev/null | grep -q ":9090"; the
   else
     echo "⚠️ 节点暂不通，已转入后台持续检测（约10分钟），连通后自动补设系统代理"
     echo "   另有看门狗每分钟自动巡检兜底，无需反复点启动"
-    nohup bash "$HOME/clash-setup/ensure-proxy.sh" >> "$LOG" 2>&1 9>&- &
+    nohup bash "$HOME/clash-setup/ensure-proxy.sh" >> "$LOG" 2>&1 9>&- 8>&- &
   fi
   echo "面板: http://127.0.0.1:9090/ui（双击「mihomo-打开面板」）"
   echo "停止: 双击「mihomo-停止」（自动恢复直连）"

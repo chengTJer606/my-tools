@@ -34,7 +34,7 @@ while IFS='|' read -r name url; do
 import os,re,datetime
 hdr=os.environ['HDR']
 d=dict(re.findall(r'(\w+)=(\d*)',hdr))
-up=int(d.get('upload',0));dl=int(d.get('download',0));total=int(d.get('total',0));exp=d.get('expire','')
+up=int(d.get('upload') or 0);dl=int(d.get('download') or 0);total=int(d.get('total') or 0);exp=d.get('expire','')
 used=up+dl
 def h(b):
     if b>=1073741824:return f'{b/1073741824:.2f} GB'

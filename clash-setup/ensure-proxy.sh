@@ -24,7 +24,7 @@ node_ok() {
 }
 
 # 已在运行则跳过（避免 start/autostart 并发时重复补设）
-LOCK=/tmp/ensure-proxy.lock
+LOCK="${XDG_RUNTIME_DIR:-/tmp}/ensure-proxy.lock"
 exec 9>"$LOCK" && flock -n 9 || exit 0
 
 for i in $(seq 1 44); do

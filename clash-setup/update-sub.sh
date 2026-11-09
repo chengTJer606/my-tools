@@ -5,7 +5,7 @@ LIST="$HOME/clash-setup/subs.list"
 SUB_URL=""; SUB_NAME=""
 
 # 更新锁：防止重复双击并发执行互相覆盖配置
-exec 8>/tmp/mihomo-update.lock
+exec 8>"${XDG_RUNTIME_DIR:-/tmp}/mihomo-update.lock"
 flock -n 8 || { echo "⚠️ 另一个订阅更新正在进行，请稍候"; exit 1; }
 
 # 解释器选择（优先当前 python3，缺 yaml 时回退系统 /usr/bin/python3）
@@ -90,6 +90,8 @@ if [ "$http_code" != "200" ] || [ ! -s "$SUBNEW" ]; then
 fi
 
 echo "[2/4] 精简配置（先备份+原子写入+格式校验）..."
+# 记录"本次更新前"的最近备份（按文件名排序，时间戳有序），供失败回滚使用
+PREV_CFG=$(ls -1 "$HOME/.config/mihomo"/config.yaml.bak.[0-9]* 2>/dev/null | sort | tail -1)
 export SUBNEW
 "$PY" - <<'PY'
 import yaml, os, shutil, time, glob
@@ -101,8 +103,9 @@ if not isinstance(d, dict) or not isinstance(d.get('proxies'), list) or not d['p
     print("  ❌ 订阅格式异常（不含有效 proxies 列表），现有配置未改动")
     raise SystemExit(1)
 proxies = d['proxies']
-all_names = [p['name'] for p in proxies]
-real = [n for n in all_names if not any(k in n for k in ['剩余流量','套餐到期','过滤掉'])]
+all_names = [p.get('name','') for p in proxies]
+PSEUDO = ['剩余流量','剩余','套餐到期','到期时间','过滤掉','官网','重置','距离下次','流量重置']
+real = [n for n in all_names if n and not any(k in n for k in PSEUDO)]
 if not real:
     print("  ❌ 订阅中无有效节点（全是信息条目），现有配置未改动")
     raise SystemExit(1)
@@ -121,6 +124,15 @@ if servers:
         if h not in fip:
             fip.append(h)
     dns['fake-ip-filter'] = fip
+    # 清除订阅自带的 nameserver-policy 对节点域名的劫持（第三方 DoH 不可用即全断，且无回退）
+    pol = dns.get('nameserver-policy')
+    if isinstance(pol, dict):
+        for h in list(pol.keys()):
+            if h in servers or h == 'geosite:cn' and False:
+                pol.pop(h, None)
+        if not pol:
+            dns.pop('nameserver-policy', None)
+dns['ipv6'] = False  # 与顶层 ipv6: false 保持一致
 out = {
     'mixed-port': d.get('mixed-port', 7890),
     'allow-lan': False, 'bind-address': '*', 'mode': 'rule', 'log-level': 'info', 'ipv6': False,
@@ -136,14 +148,17 @@ out = {
 }
 # fake-ip 使用 benchmark 保留网段（订阅默认 28.0.0.0/8 是公网段，有冲突隐患）
 dns['fake-ip-range'] = '198.18.0.0/16'
-# 备份现有配置（保留最近5个），再原子替换（防写一半损坏）
+# 备份现有配置（保留最近5个时间戳备份，手工备份不动），再原子替换（防写一半损坏）
 bak = f"{cfg}.bak.{time.strftime('%Y%m%d%H%M%S')}"
 if os.path.exists(cfg):
     shutil.copy2(cfg, bak)
+    os.chmod(bak, 0o600)
 tmp = f"{cfg}.tmp.{os.getpid()}"
-yaml.safe_dump(out, open(tmp, 'w'), allow_unicode=True, sort_keys=False)
+with open(tmp, 'w') as f:
+    yaml.safe_dump(out, f, allow_unicode=True, sort_keys=False)
+os.chmod(tmp, 0o600)   # 配置含节点 uuid，禁止同机其他用户读取
 os.replace(tmp, cfg)
-for old in sorted(glob.glob(cfg + '.bak.*'))[:-5]:
+for old in sorted(glob.glob(cfg + '.bak.[0-9]*'))[:-5]:
     os.remove(old)
 print(f"  已备份: {os.path.basename(bak) if os.path.exists(bak) else '无（首次）'}（保留最近5个）")
 print(f"  精简完成: 节点={len(proxies)} 可选真实节点={len(real)} 节点域名独立解析={len(servers)}")
@@ -151,9 +166,13 @@ PY
 
 echo "[3/4] 语义校验（mihomo -t）..."
 if ! "$HOME/.local/bin/mihomo" -t -d "$HOME/.config/mihomo" > /tmp/mihomo-config-test.log 2>&1; then
-  echo "  ❌ 新配置未通过语义校验，自动回滚上一个备份..."
-  lastbak=$(ls -t "$HOME/.config/mihomo"/config.yaml.bak.* 2>/dev/null | head -1)
-  if [ -n "$lastbak" ]; then cp -f "$lastbak" "$HOME/.config/mihomo/config.yaml"; echo "  已回滚: $(basename "$lastbak")"; fi
+  echo "  ❌ 新配置未通过语义校验，自动回滚到更新前配置..."
+  if [ -n "$PREV_CFG" ] && [ -f "$PREV_CFG" ]; then
+    cp -f "$PREV_CFG" "$HOME/.config/mihomo/config.yaml"; chmod 600 "$HOME/.config/mihomo/config.yaml"
+    echo "  已回滚: $(basename "$PREV_CFG")"
+  else
+    echo "  ⚠️ 无可用备份，请手动检查配置"
+  fi
   grep -E "error|failed" /tmp/mihomo-config-test.log | tail -3
   exit 1
 fi
@@ -165,7 +184,7 @@ if curl -s --max-time 15 -X PUT 'http://127.0.0.1:9090/configs?force=true' -H 'C
 else
   echo "  热重载失败，尝试重启mihomo..."
   bash "$HOME/clash-setup/stop-mihomo.sh" 2>/dev/null || true
-  sleep 1; bash "$HOME/clash-setup/start-mihomo.sh"
+  sleep 1; bash "$HOME/clash-setup/start-mihomo.sh" 8>&- < /dev/null
 fi
 sleep 2
 echo

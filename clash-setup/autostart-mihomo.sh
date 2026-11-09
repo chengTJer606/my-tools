@@ -5,7 +5,7 @@ STOPMARK="$DIR/.user-stopped"
 [ -x "$BIN" ] || exit 1
 
 # 全局操作锁：与手动启动/停止/看门狗串行，杜绝并发互杀
-exec 9>/tmp/mihomo-control.lock
+exec 9>"${XDG_RUNTIME_DIR:-/tmp}/mihomo-control.lock"
 flock -w 60 9 || exit 1
 
 # 开机=新会话，清除上轮「主动停止」标记，恢复自动运行
@@ -23,7 +23,7 @@ done
 
 # 停旧 + 启动（9>&- 关闭锁描述符防锁继承；>> O_APPEND 追加，配合看门狗 copytruncate 截断无稀疏空洞）
 pkill -x mihomo 2>/dev/null || true; sleep 1
-nohup "$BIN" -d "$DIR" >> "$LOG" 2>&1 9>&- &
+nohup "$BIN" -d "$DIR" >> "$LOG" 2>&1 9>&- 8>&- &
 echo $! > "$PIDF"
 
 # 等待进程存活且 9090 监听（最多15秒，双重确认防端口被占误判）
@@ -34,7 +34,7 @@ pgrep -x mihomo >/dev/null 2>&1 && ss -tln 2>/dev/null | grep -q ":9090" || exit
 # 检测目标用 generate_204（轻量，mihomo 健康检查同款），比整页 google.com 快且稳
 ok=0
 for i in $(seq 1 4); do
-  c=$(curl -s --max-time 6 --proxy http://127.0.0.1:7890 -o /dev/null -w "%{http_code}" https://www.google.com/generate_204 2>/dev/null)
+  c=$(curl -s --noproxy '' --max-time 6 --proxy http://127.0.0.1:7890 -o /dev/null -w "%{http_code}" https://www.google.com/generate_204 2>/dev/null)
   [ "$c" = "204" ] && { ok=1; break; }
   sleep 2
 done
@@ -50,5 +50,5 @@ if [ "$ok" = "1" ]; then
   gsettings set org.gnome.system.proxy ignore-hosts "['localhost','127.0.0.0/8','::1','10.0.0.0/8','172.16.0.0/12','192.168.0.0/16']"
 else
   # 首轮不通 → 后台持续补设（约10分钟），节点一旦连通自动设上系统代理
-  nohup bash "$HOME/clash-setup/ensure-proxy.sh" >> "$LOG" 2>&1 9>&- &
+  nohup bash "$HOME/clash-setup/ensure-proxy.sh" >> "$LOG" 2>&1 9>&- 8>&- &
 fi

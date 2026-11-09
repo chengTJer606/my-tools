@@ -5,7 +5,7 @@ STOPMARK="$HOME/.config/mihomo/.user-stopped"
 stopped=0
 
 # 全局操作锁：与 start/autostart/watchdog 串行
-exec 9>/tmp/mihomo-control.lock
+exec 9>"${XDG_RUNTIME_DIR:-/tmp}/mihomo-control.lock"
 flock -w 30 9 || { echo "⚠️ 另一个启停操作正在进行，请稍候重试"; exit 1; }
 
 # 写主动停止标记：看门狗检测到它将不再自动拉起，直到下次手动/开机启动

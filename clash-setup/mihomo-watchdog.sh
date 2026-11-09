@@ -10,7 +10,7 @@ PIDF="$HOME/clash-setup/mihomo.pid"
 STOPMARK="$DIR/.user-stopped"
 
 # 全局操作锁：与 start/stop/autostart 串行，防互杀
-exec 9>/tmp/mihomo-control.lock
+exec 9>"${XDG_RUNTIME_DIR:-/tmp}/mihomo-control.lock"
 flock -w 20 9 || exit 0
 
 # 1) 用户主动停止过 → 不动
@@ -34,13 +34,13 @@ set_proxy_manual() {
 }
 
 node_ok() {
-  [ "$(curl -s --max-time 6 --proxy http://127.0.0.1:7890 -o /dev/null -w '%{http_code}' https://www.google.com/generate_204 2>/dev/null)" = "204" ]
+  [ "$(curl -s --noproxy '' --max-time 6 --proxy http://127.0.0.1:7890 -o /dev/null -w '%{http_code}' https://www.google.com/generate_204 2>/dev/null)" = "204" ]
 }
 
 # 2) mihomo 未运行 → 拉起（以进程身份判定：9090 端口可能被其他程序占用，不能作为存活依据）
 if ! pgrep -x mihomo >/dev/null 2>&1; then
   pkill -x mihomo 2>/dev/null || true; sleep 1
-  nohup "$BIN" -d "$DIR" >> "$LOG" 2>&1 9>&- &
+  nohup "$BIN" -d "$DIR" >> "$LOG" 2>&1 9>&- 8>&- &
   echo $! > "$PIDF"
   for i in $(seq 1 15); do pgrep -x mihomo >/dev/null 2>&1 && ss -tln 2>/dev/null | grep -q ':9090' && break; sleep 1; done
   if pgrep -x mihomo >/dev/null 2>&1 && ss -tln 2>/dev/null | grep -q ':9090'; then
