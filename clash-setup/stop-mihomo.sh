@@ -26,6 +26,10 @@ if [ "$stopped" = "0" ] && pgrep -x mihomo >/dev/null 2>&1; then
   sleep 1
 fi
 
+# 立刻切直连：不要等进程完全退出再切。否则 SIGTERM 到退出这几秒里，
+# 系统代理还指着已经不通的 7890，浏览器会报"无法连接代理服务器"。
+gsettings set org.gnome.system.proxy mode 'none'
+
 # 验证（先给 SIGTERM 最多5秒优雅退出，再考虑强杀，避免秒变 SIGKILL）
 for i in $(seq 1 5); do
   pgrep -x mihomo >/dev/null 2>&1 || break

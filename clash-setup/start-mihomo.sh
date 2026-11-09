@@ -20,16 +20,16 @@ rm -f "$STOPMARK"
 if pgrep -x mihomo >/dev/null 2>&1; then
   echo "⚠️ mihomo 已在运行（进程存活）"
   r=""
-  if [ -n "$DISPLAY" ] && command -v zenity >/dev/null 2>&1; then
-    zerr=$(zenity --question --title="mihomo 已运行" --text="mihomo 已在运行。是否重启？" --ok-label="重启" --cancel-label="取消" 2>&1) && r="y"
-    # zenity 弹窗本身失败（有错误输出）→ 回退终端确认，绝不静默当取消
-    if [ -z "$r" ] && [ -n "$zerr" ]; then
-      echo "（弹窗不可用，改用终端确认）"
-      read -rp "是否重启？[y/N]: " r
-    fi
+  if [ -t 0 ]; then
+    # 桌面快捷方式是通过 run-in-terminal 在终端里跑的 → 优先用终端确认。
+    # 以前优先弹 zenity，弹窗可能跑到窗口后面，用户观感就是"双击了没反应"。
+    read -rp "是否重启？[y/N]: " r
+  elif [ -n "$DISPLAY" ] && command -v zenity >/dev/null 2>&1; then
+    zenity --question --title="mihomo 已运行" --text="mihomo 已在运行。是否重启？" \
+      --ok-label="重启" --cancel-label="取消" 2>/dev/null && r="y"
   else
-    # 非交互环境（订阅更新兜底/后台调用）无 tty 时无法确认，直接按"重启"处理，避免卡住或静默取消
-    if [ ! -t 0 ]; then r="y"; else read -rp "是否重启？[y/N]: " r; fi
+    # 非交互环境（订阅更新兜底/后台调用）无 tty 也无法弹窗 → 直接按"重启"处理，避免卡住或静默取消
+    r="y"
   fi
   if [ "$r" != "y" ] && [ "$r" != "Y" ]; then
     echo "已取消（mihomo 继续运行）"
@@ -60,6 +60,9 @@ if pgrep -x mihomo >/dev/null 2>&1; then
 fi
 
 # 停旧进程（PID文件需校验进程身份[防PID复用误杀] + pkill 兜底）
+# 重启前先把系统代理切直连：否则从杀进程到新进程跑起来这几秒里，
+# 浏览器还指着已经断掉的 7890，会是"能上网但全报代理错误"的观感。起来后再设回 manual。
+gsettings set org.gnome.system.proxy mode 'none'
 if [ -f "$PIDF" ]; then
   pid=$(cat "$PIDF" 2>/dev/null)
   if [ -n "$pid" ] && [ "$(cat /proc/$pid/comm 2>/dev/null)" = "mihomo" ]; then

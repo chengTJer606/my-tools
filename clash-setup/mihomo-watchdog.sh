@@ -37,8 +37,19 @@ node_ok() {
   [ "$(curl -s --noproxy '' --max-time 6 --proxy http://127.0.0.1:7890 -o /dev/null -w '%{http_code}' https://www.google.com/generate_204 2>/dev/null)" = "204" ]
 }
 
-# 2) mihomo 未运行 → 拉起（以进程身份判定：9090 端口可能被其他程序占用，不能作为存活依据）
+# 2) mihomo 未运行 → 先 fail-open 切直连，再拉起
+#    为什么先切：进程已死但系统代理还是 manual 时，浏览器/微信会全部指向
+#    127.0.0.1:7890 这个没有监听的端口，表现就是"网全断了"，要等看门狗拉起才恢复。
+#    先切 none 保证这一分钟里国内网站照常能用，拉起成功后再设回 manual。
 if ! pgrep -x mihomo >/dev/null 2>&1; then
+  if [ "$(gsettings get org.gnome.system.proxy mode 2>/dev/null)" = "'manual'" ]; then
+    if ss -tln 2>/dev/null | grep -q ':7890 '; then
+      : # 7890 仍有监听（可能是别的进程），不动代理设置
+    else
+      gsettings set org.gnome.system.proxy mode 'none'
+      echo "$(date '+%F %T') watchdog: mihomo 不在且 7890 无监听，系统代理已临时切回直连(fail-open)" >> "$LOG"
+    fi
+  fi
   pkill -x mihomo 2>/dev/null || true; sleep 1
   nohup "$BIN" -d "$DIR" >> "$LOG" 2>&1 9>&- 8>&- &
   echo $! > "$PIDF"
@@ -66,7 +77,13 @@ proxy_ok() {
 }
 
 if ! proxy_ok; then
-  if node_ok; then
+  # 刚拉起的 mihomo 可能需要几秒才把节点测通，这里给 3 次机会再放弃
+  ok=0
+  for i in 1 2 3; do
+    node_ok && { ok=1; break; }
+    sleep 3
+  done
+  if [ "$ok" = "1" ]; then
     set_proxy_manual
     echo "$(date '+%F %T') watchdog: 系统代理缺失/配置不正确，已自动补设 127.0.0.1:7890" >> "$LOG"
   fi
