@@ -61,6 +61,11 @@ do_usage()    { clear; echo "═══════════ 订阅用量 ═�
 do_web()      { bash "$DIR/open-panel.sh" >/dev/null 2>&1 & }
 do_logs()     { clear; echo "═══════════ 最近 100 行日志（$LOG） ═══════════"; tail -100 "$LOG" 2>/dev/null | cut -c1-160; pause; }
 do_follow()   { clear; echo "═══════════ 实时日志（Ctrl-C 退出跟踪） ═══════════"; tail -f "$LOG" 2>/dev/null | cut -c1-160; clear; }
+do_netlog()   { clear; echo "═══════════ 网络事件日志（自动DNS适配记录，最近50条） ═══════════"
+  tail -50 "$DIR/network-events.log" 2>/dev/null || echo "（暂无记录——任何WiFi/网线上线时会自动写这里）"
+  echo; echo "说明：任何 WiFi/有线网络连上时，系统会自动把该网络 DNS 固定为"
+  echo "      223.5.5.5/119.29.29.29 并记录在此，无需手动处理。"
+  pause; }
 do_zhanlu()   { clear; echo "═══════════ 湛卢连通性 ═══════════"
   pgrep -f "zl serve" >/dev/null && echo "zl-serve 进程: ✅ 运行中" || echo "zl-serve 进程: ❌ 未运行（湛卢没开？）"
   for u in https://moma.cmecloud.cn/v1 https://ecloud.10086.cn; do
@@ -86,12 +91,14 @@ menu_whiptail() {
       "8" "查看最近日志（100行）" \
       "9" "实时跟踪日志（Ctrl-C 退出）" \
       "10" "湛卢连通性检查" \
+      "11" "网络事件日志（自动DNS适配记录）" \
       "0" "退出" \
       3>&1 1>&2 2>&3) || break
     [ -z "${choice:-}" ] && break
     case "$choice" in
       1) do_status;; 2) do_start;; 3) do_restart;; 4) do_stop;; 5) do_update;;
-      6) do_usage;; 7) do_web;; 8) do_logs;; 9) do_follow;; 10) do_zhanlu;; 0|"") break;;
+      6) do_usage;; 7) do_web;; 8) do_logs;; 9) do_follow;; 10) do_zhanlu;; 11) do_netlog;; 0|"") break;;
+      *) : ;;
     esac
   done
 }
@@ -103,11 +110,12 @@ menu_text() {
     echo " 1) 状态总览   2) 启动   3) 重启   4) 停止(恢复直连)"
     echo " 5) 更新订阅   6) 查看用量          7) 打开Web面板"
     echo " 8) 最近日志   9) 实时日志(Ctrl-C退) 10) 湛卢连通性"
+    echo " 11) 网络事件日志(自动DNS适配)"
     echo " 0) 退出"
     read -rp "选择: " choice
     case "$choice" in
       1) do_status;; 2) do_start;; 3) do_restart;; 4) do_stop;; 5) do_update;;
-      6) do_usage;; 7) do_web;; 8) do_logs;; 9) do_follow;; 10) do_zhanlu;; 0|"") break;;
+      6) do_usage;; 7) do_web;; 8) do_logs;; 9) do_follow;; 10) do_zhanlu;; 11) do_netlog;; 0|"") break;;
       *) echo "无效选项"; sleep 1;;
     esac
   done
