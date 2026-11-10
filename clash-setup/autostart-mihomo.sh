@@ -27,8 +27,8 @@ nohup "$BIN" -d "$DIR" >> "$LOG" 2>&1 9>&- 8>&- &
 echo $! > "$PIDF"
 
 # 等待进程存活且 9090 监听（最多15秒，双重确认防端口被占误判）
-for i in $(seq 1 15); do pgrep -x mihomo >/dev/null 2>&1 && ss -tln 2>/dev/null | grep -q ":9090" && break; sleep 1; done
-pgrep -x mihomo >/dev/null 2>&1 && ss -tln 2>/dev/null | grep -q ":9090" || exit 1
+for i in $(seq 1 15); do pgrep -x mihomo >/dev/null 2>&1 && ss -tln "sport = :9090" 2>/dev/null | grep -q LISTEN && break; sleep 1; done
+pgrep -x mihomo >/dev/null 2>&1 && ss -tln "sport = :9090" 2>/dev/null | grep -q LISTEN || exit 1
 
 # 节点通才设系统代理（不通则保持none，浏览器直连，不崩）
 # 检测目标用 generate_204（轻量，mihomo 健康检查同款），比整页 google.com 快且稳

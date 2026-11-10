@@ -246,7 +246,11 @@ if [ "$STOPPED" != "1" ] && ! node_ok; then
     exit 1
   fi
 fi
-echo "  ✅ 代理实测连通（google generate_204 = 204）"
+if [ "$STOPPED" = "1" ]; then
+  echo "✅ 配置已更新并校验通过（mihomo 处于停止状态，下次启动自动使用新配置）"
+else
+  echo "  ✅ 代理实测连通（google generate_204 = 204）"
+fi
 echo "✅ 完成。控制面板 → 7 打开 Web 面板选节点"
 echo "查看用量: 控制面板 → 6，或 bash ~/clash-setup/sub-info.sh"
 echo "管理订阅名称: 编辑 ~/clash-setup/subs.list"

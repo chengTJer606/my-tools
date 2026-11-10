@@ -10,7 +10,7 @@ DIR="$HOME/.config/mihomo"
 LOG="$HOME/clash-setup/mihomo.log"
 PIDF="$HOME/clash-setup/mihomo.pid"
 STOPMARK="$DIR/.user-stopped"
-FAILCNT="/tmp/mihomo-node-fail.count"
+FAILCNT="${XDG_RUNTIME_DIR:-/tmp}/mihomo-node-fail.count"
 
 # 全局操作锁：与 start/stop/autostart 串行，防互杀
 exec 9>"${XDG_RUNTIME_DIR:-/tmp}/mihomo-control.lock"
@@ -73,12 +73,25 @@ fail_open() {
   fi
 }
 
+# 拉起后有界等待节点就绪（≤45s），就绪立即补设代理，避免干等下一个 timer 周期
+pull_up_settle() {
+  for i in $(seq 1 9); do
+    node_ok && { set_proxy_manual; echo "$(date '+%F %T') watchdog: 拉起后节点已通，系统代理已补设 127.0.0.1:7890" >> "$LOG"; return 0; }
+    sleep 5
+  done
+  echo "$(date '+%F %T') watchdog: 拉起后节点暂未测通，交给后续周期补设" >> "$LOG"
+}
+
 # 2) mihomo 未运行 → 先 fail-open 切直连，再拉起
 #    为什么先切：进程已死但系统代理还是 manual 时，浏览器/微信会全部指向
 #    127.0.0.1:7890 这个没有监听的端口，表现就是"网全断了"。
+#    拉起后有界等待节点并补设，然后立即退出：既避免与 2.5 假活分支叠加
+#    重复强杀重启，也避免无限持锁导致 timer 下一轮 flock -w 20 拿不到锁被跳过。
 if ! pgrep -x mihomo >/dev/null 2>&1; then
   fail_open "mihomo 不在且 7890 无监听"
   pull_up
+  pull_up_settle
+  exit 0
 fi
 
 # 2.5) 假活检测：进程在但 7890 无监听（进程卡死/热重载失败/配置损坏导致端口关闭）
@@ -94,6 +107,7 @@ if ! port_listen 7890; then
       fail_open "mihomo 假活（进程在 PID $_pid 但 7890 无监听）"
       echo "$(date '+%F %T') watchdog: mihomo 假活（进程在但 7890 无监听，存活${_age}s），已强杀重启" >> "$LOG"
       pull_up
+      exit 0
     else
       # 刚启动还没监听，交给下一周期
       exit 0
@@ -130,8 +144,8 @@ if node_ok; then
   fi
 else
   if proxy_ok; then
-    n=$(cat "$FAILCNT" 2>/dev/null || echo 0); n=$((n+1))
-    echo "$n" > "$FAILCNT"
+    n=$(cat "$FAILCNT" 2>/dev/null); case "$n" in ''|*[!0-9]*) n=0;; esac; n=$((n+1))
+    echo "$n" > "$FAILCNT"; chmod 600 "$FAILCNT" 2>/dev/null
     if [ "$n" -ge 5 ]; then
       gsettings set org.gnome.system.proxy mode 'none'
       rm -f "$FAILCNT"
