@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=mihomo 停止
+Comment=停止 mihomo 代理内核
+Exec=bash /home/huawei/clash-setup/run-in-terminal.sh stop-mihomo.sh
+Icon=media-playback-stop
+Terminal=true
+Categories=Network;

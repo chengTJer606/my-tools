@@ -18,8 +18,18 @@ IFACE="$1"; ACTION="$2"
 
 log() { echo "$(date '+%F %T') [$IFACE/$ACTION] $*" >> "$LOG"; }
 
+# 日志属主防护：本钩子以 root 运行，若日志被删后由 root 重建会变 root 属主，
+# 导致面板/看门狗（huawei 用户）无法写入——这里确保它始终归 huawei 所有。
+if [ ! -f "$LOG" ]; then
+  touch "$LOG" && chown huawei:huawei "$LOG" && chmod 644 "$LOG"
+elif [ "$(stat -c %U "$LOG" 2>/dev/null)" != "huawei" ]; then
+  chown huawei:huawei "$LOG" 2>/dev/null
+fi
+
 case "$ACTION" in
-  up|dhcp4-change|reapply) ;;
+  # up: 连接建立；dhcp4-change: 租约变更/DNS 变更；reapply: 手动重应用；
+  # dns-change: 系统 DNS 变化；connectivity-change: NM 层连通性状态变化
+  up|dhcp4-change|reapply|dns-change|connectivity-change) ;;
   *) exit 0 ;;
 esac
 

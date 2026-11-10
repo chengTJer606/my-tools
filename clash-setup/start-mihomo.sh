@@ -73,9 +73,9 @@ fi
 pkill -x mihomo 2>/dev/null || true
 sleep 1
 
-# 端口占用容错（旧进程没退干净则强杀）
+# 端口占用容错（旧进程没退干净则强杀）；端口检测用 ss 过滤器精确匹配
 for p in 7890 9090; do
-  if ss -tln 2>/dev/null | grep -q ":$p "; then
+  if ss -tln "sport = :$p" 2>/dev/null | grep -q LISTEN; then
     echo "端口 $p 仍被占用，强杀旧进程..."; pkill -9 -x mihomo 2>/dev/null || true; sleep 2
   fi
 done
@@ -86,7 +86,7 @@ echo $! > "$PIDF"
 sleep 2
 
 # 启动验证（进程身份+端口双重确认，防 9090 被其他程序占用时误判成功）
-if pgrep -x mihomo >/dev/null 2>&1 && ss -tln 2>/dev/null | grep -q ":9090"; then
+if pgrep -x mihomo >/dev/null 2>&1 && ss -tln "sport = :9090" 2>/dev/null | grep -q LISTEN; then
   echo "✅ mihomo 已启动，PID: $(cat "$PIDF")"
   echo "检测节点连通性（决定是否设系统代理）..."
   ok=0
@@ -110,8 +110,8 @@ if pgrep -x mihomo >/dev/null 2>&1 && ss -tln 2>/dev/null | grep -q ":9090"; the
     echo "   另有看门狗每分钟自动巡检兜底，无需反复点启动"
     nohup bash "$HOME/clash-setup/ensure-proxy.sh" >> "$LOG" 2>&1 9>&- 8>&- &
   fi
-  echo "面板: http://127.0.0.1:9090/ui（双击「mihomo-打开面板」）"
-  echo "停止: 双击「mihomo-停止」（自动恢复直连）"
+  echo "面板: 控制面板 → 7 打开 Web 面板（http://127.0.0.1:9090/ui）"
+  echo "停止: 控制面板 → 4 停止（自动恢复直连）"
 else
   echo "❌ mihomo 启动失败，最近日志："
   tail -5 "$LOG" 2>/dev/null

@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=mihomo 查看用量
+Comment=查看订阅流量用量与套餐余额（弹窗）
+Exec=bash /home/huawei/clash-setup/sub-info.sh
+Icon=folder-documents
+Terminal=false
+Categories=Network;

@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=mihomo 打开面板
+Comment=用360浏览器打开 mihomo Web UI（自动检测mihomo是否运行）
+Exec=bash /home/huawei/clash-setup/open-panel.sh
+Icon=web-browser
+Terminal=false
+Categories=Network;

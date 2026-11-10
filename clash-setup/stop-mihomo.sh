@@ -43,7 +43,7 @@ fi
 gsettings set org.gnome.system.proxy mode 'none'
 if pgrep -x mihomo >/dev/null 2>&1; then
   echo "⚠️ 仍有 mihomo 进程残留"
-elif ss -tln 2>/dev/null | grep -q ":9090"; then
+elif ss -tln "sport = :9090" 2>/dev/null | grep -q LISTEN; then
   echo "ℹ️ 9090 被其他程序占用（非 mihomo，不影响）；已停止并恢复直连"
 else
   echo "✅ mihomo 已停止，系统代理已恢复直连（浏览器/微信/QQ 正常上网）"

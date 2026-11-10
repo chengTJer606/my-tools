@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=mihomo 更新订阅
+Comment=续订后拉取最新订阅，更新节点与额度，精简配置并重启mihomo
+Exec=bash /home/huawei/clash-setup/run-in-terminal.sh update-sub.sh
+Icon=system-software-update
+Terminal=true
+Categories=Network;

@@ -17,6 +17,18 @@ node_ok() {
   [ "$(curl -s --noproxy '' --max-time 8 -x http://127.0.0.1:7890 -o /dev/null -w '%{http_code}' https://www.google.com/generate_204 2>/dev/null)" = "204" ]
 }
 
+# 9090 API 认证（secret 在 ~/.config/mihomo/config.yaml 与 ~/clash-setup/api.secret）
+SECRET=""; [ -f "$HOME/clash-setup/api.secret" ] && SECRET=$(cat "$HOME/clash-setup/api.secret")
+api() { curl -s --max-time 15 -H "Authorization: Bearer $SECRET" "$@"; }
+
+# 用户处于主动停止状态时不强拉起 mihomo
+STOPMARK="$HOME/.config/mihomo/.user-stopped"
+STOPPED=0
+if [ -f "$STOPMARK" ]; then
+  STOPPED=1
+  echo "ℹ️ mihomo 当前处于主动停止状态：本次只更新配置并校验，不拉起进程。"
+fi
+
 # 改subs.list中某URL对应的名称
 rename_in_list() {
   "$PY" - "$LIST" "$SUB_URL" "$1" <<'PY'
@@ -105,6 +117,7 @@ else
   rm -f "$PREV_CFG"
 fi
 export SUBNEW
+export MIHOMO_SECRET="$SECRET"
 "$PY" - <<'PY'
 import yaml, os, shutil, time, glob
 cfg = os.path.join(os.environ['HOME'], '.config/mihomo/config.yaml')
@@ -169,6 +182,7 @@ out = {
     ],
     'rules': ['GEOIP,CN,DIRECT', 'MATCH,节点选择'],
     'external-controller': '127.0.0.1:9090', 'external-ui': 'ui',
+    'secret': os.environ.get('MIHOMO_SECRET', ''),
 }
 # fake-ip 使用 benchmark 保留网段（订阅默认 28.0.0.0/8 是公网段，有冲突隐患）
 dns['fake-ip-range'] = '198.18.0.0/16'
@@ -203,23 +217,27 @@ fi
 echo "  ✅ 语义校验通过"
 
 echo "[4/4] 热重载mihomo（不重启进程，不碰gsettings，不崩溃）..."
-if curl -s --max-time 15 -X PUT 'http://127.0.0.1:9090/configs?force=true' -H 'Content-Type: application/json' -d '{}' -w "  reload=%{http_code}\n" 2>/dev/null | grep -q "reload=204"; then
+if api -X PUT 'http://127.0.0.1:9090/configs?force=true' -H 'Content-Type: application/json' -d '{}' -w "  reload=%{http_code}\n" 2>/dev/null | grep -q "reload=204"; then
   echo "  热重载成功"
 else
-  echo "  热重载失败，尝试重启mihomo..."
-  bash "$HOME/clash-setup/stop-mihomo.sh" 2>/dev/null || true
-  sleep 1; bash "$HOME/clash-setup/start-mihomo.sh" 8>&- < /dev/null
+  if [ "$STOPPED" = "1" ]; then
+    echo "  ℹ️ mihomo 处于停止状态，跳过重启（下次启动自动使用新配置）"
+  else
+    echo "  热重载失败，尝试重启mihomo..."
+    bash "$HOME/clash-setup/stop-mihomo.sh" 2>/dev/null || true
+    sleep 1; bash "$HOME/clash-setup/start-mihomo.sh" 8>&- < /dev/null
+  fi
 fi
 sleep 2
 # 生效后连通性验证：订阅可能"语法正确但节点全不可用"，此时热重载会让境外流量全断，
 # 必须在这里兜住——连续两次探测失败就回滚到更新前配置并再次热重载。
-if ! node_ok; then
+if [ "$STOPPED" != "1" ] && ! node_ok; then
   sleep 3
   if ! node_ok; then
     echo "  ⚠️ 新订阅节点全部不可用，回滚到更新前配置..."
     if [ -n "$PREV_CFG" ] && [ -f "$PREV_CFG" ]; then
       cp -f "$PREV_CFG" "$HOME/.config/mihomo/config.yaml"; chmod 600 "$HOME/.config/mihomo/config.yaml"
-      curl -s --max-time 15 -X PUT 'http://127.0.0.1:9090/configs?force=true' -H 'Content-Type: application/json' -d '{}' >/dev/null 2>&1 || true
+      api -X PUT 'http://127.0.0.1:9090/configs?force=true' -H 'Content-Type: application/json' -d '{}' >/dev/null 2>&1 || true
       sleep 2
       node_ok && echo "  ✅ 已回滚，代理恢复可用" || echo "  ❌ 回滚后仍不通，请检查节点/网络，或 bash ~/clash-setup/start-mihomo.sh 重启"
     else
@@ -229,6 +247,6 @@ if ! node_ok; then
   fi
 fi
 echo "  ✅ 代理实测连通（google generate_204 = 204）"
-echo "✅ 完成。打开 http://127.0.0.1:9090/ui 选节点"
-echo "查看用量: 双击桌面「mihomo-查看用量」或 bash ~/clash-setup/sub-info.sh"
+echo "✅ 完成。控制面板 → 7 打开 Web 面板选节点"
+echo "查看用量: 控制面板 → 6，或 bash ~/clash-setup/sub-info.sh"
 echo "管理订阅名称: 编辑 ~/clash-setup/subs.list"

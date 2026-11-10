@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=mihomo 启动
+Comment=启动 mihomo 代理内核
+Exec=bash /home/huawei/clash-setup/run-in-terminal.sh start-mihomo.sh
+Icon=media-playback-start
+Terminal=true
+Categories=Network;
