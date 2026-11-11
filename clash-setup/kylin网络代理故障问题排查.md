@@ -237,7 +237,7 @@ systemd-resolved 对所有域名间歇返回 SERVFAIL
 
 ### 8.2 git / GitHub 同步状态（2026-11-10 确认）
 
-- 仓库：`~/clash-setup`（符号链接进 `/data/个人文件/my-tools`），远程 `github.com/chengTJer606/my-tools.git`
+- 仓库：`~/clash-setup`（符号链接进 `/data/cheng/my-tools`），远程 `github.com/chengTJer606/my-tools.git`
 - **`cheng` 与 `main` 分支均已同步至最新提交 `a58d2de`**（第六轮加固+审计修复）。
 - 安全核查：全历史无 token/密钥入库；api.secret 已加入 .gitignore；敏感文件 600。
 - 本报告同步存放于 `~/clash-setup/kylin网络代理故障问题排查.md`（即 my-tools 内），桌面副本为日常查阅入口。

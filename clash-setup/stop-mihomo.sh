@@ -4,12 +4,13 @@ PIDF="$HOME/clash-setup/mihomo.pid"
 STOPMARK="$HOME/.config/mihomo/.user-stopped"
 stopped=0
 
+# 先写主动停止标记（必须在拿锁之前）：若此刻 watchdog/autostart 正持锁做拉起
+# （最坏约99秒），拿锁超时退出也不会丢失用户的停止意图——看门狗看到标记即不再拉起
+touch "$STOPMARK"
+
 # 全局操作锁：与 start/autostart/watchdog 串行
 exec 9>"${XDG_RUNTIME_DIR:-/tmp}/mihomo-control.lock"
-flock -w 30 9 || { echo "⚠️ 另一个启停操作正在进行，请稍候重试"; exit 1; }
-
-# 写主动停止标记：看门狗检测到它将不再自动拉起，直到下次手动/开机启动
-touch "$STOPMARK"
+flock -w 30 9 || { echo "⚠️ 另一个启停操作正在进行（停止意图已记录，看门狗已静默），请稍后重试"; exit 1; }
 
 # PID文件方式（先校验该PID确实是mihomo，防PID复用时误杀无关进程）
 if [ -f "$PIDF" ]; then
