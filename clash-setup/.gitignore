@@ -4,6 +4,7 @@ mihomo
 # 运行态文件
 mihomo.log
 mihomo.pid
+network-events.log
 # 订阅链接（含 token，泄露=账号被盗用）
 subs.list
 api.secret

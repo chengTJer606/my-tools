@@ -66,11 +66,12 @@ NC='\033[0m'
 
 get_size_bytes() {
     local path="$1"
+    local size
     if [ -d "$path" ] || [ -f "$path" ]; then
-        du -sb "$path" 2>/dev/null | cut -f1
-    else
-        echo 0
+        size=$(du -sb "$path" 2>/dev/null | cut -f1)
     fi
+    # du 失败或路径不存在时兜底为0，保证数值比较不报错
+    echo "${size:-0}"
 }
 
 format_size() {
@@ -112,7 +113,10 @@ get_disk_usage_percent() {
 }
 
 get_machine_id() {
-    cat /etc/machine-id 2>/dev/null || echo "unknown"
+    local mid
+    mid=$(cat /etc/machine-id 2>/dev/null)
+    # 读取失败或为空时返回 unknown，调用方需据此放弃删除类操作
+    [ -n "$mid" ] && echo "$mid" || echo "unknown"
 }
 
 get_item_size() {
@@ -135,6 +139,13 @@ get_item_size() {
             ;;
         journal_vacuum)
             get_size_bytes "/var/log/journal/${mid}"
+            ;;
+        conda_pkgs)
+            # base + 数据盘两处 pkgs 缓存合计
+            local total=0
+            total=$((total + $(get_size_bytes "${HOME}/miniforge3/pkgs")))
+            [ -d /data/cheng/conda-pkgs ] && total=$((total + $(get_size_bytes /data/cheng/conda-pkgs)))
+            echo "$total"
             ;;
         *)
             get_size_bytes "$path"
@@ -209,6 +220,10 @@ rotate_logs() {
 clean_journal_old() {
     local mid
     mid=$(get_machine_id)
+    # 安全兜底：无法确定当前机器ID时禁止删除，避免误删在用journal目录
+    if [ -z "$mid" ] || [ "$mid" = "unknown" ]; then
+        return 1
+    fi
     for dir in /var/log/journal/*/; do
         [ -d "$dir" ] || continue
         local dname
@@ -233,13 +248,28 @@ clean_hwupdate() {
     sudo_run rm -rf /var/log/hwupdate/*
 }
 
-clean_user_cache() {
-    rm -rf "${HOME}/.cache/"* 2>/dev/null
-}
-
 clean_npm_cache() {
     rm -rf "${HOME}/.npm/_cacache" 2>/dev/null
     npm cache clean --force 2>/dev/null
+}
+
+# --- 2026-11-11 新增专项清理项 ---
+
+clean_conda_pkgs() {
+    # conda 官方清理命令，自动覆盖全部 pkgs_dirs（base + 数据盘），只清不被环境引用的包
+    "${HOME}/miniforge3/bin/conda" clean --all -y >/dev/null 2>&1
+}
+
+clean_pip_cache() {
+    rm -rf "${HOME}/.cache/pip" 2>/dev/null
+}
+
+clean_uv_cache() {
+    rm -rf "${HOME}/.cache/uv" 2>/dev/null
+}
+
+clean_uksc_cache() {
+    rm -rf "${HOME}/.cache/uksc" 2>/dev/null
 }
 
 # 清理项数组: "ID|名称|检查路径|类型|清理函数"
@@ -249,8 +279,18 @@ CLEAN_ITEMS=(
     "coredump|核心转储文件|/var/lib/systemd/coredump|system|clean_coredump"
     "apt_cache|APT包缓存|/var/cache/apt|system|clean_apt"
     "hwupdate|硬件更新日志|/var/log/hwupdate|system|clean_hwupdate"
-    "user_cache|应用缓存(.cache)|${HOME}/.cache|user|clean_user_cache"
     "npm_cache|npm缓存|${HOME}/.npm|user|clean_npm_cache"
+    "conda_pkgs|conda包缓存(miniforge)|${HOME}/miniforge3/pkgs|user|clean_conda_pkgs"
+    "pip_cache|pip缓存|${HOME}/.cache/pip|user|clean_pip_cache"
+    "uv_cache|uv缓存|${HOME}/.cache/uv|user|clean_uv_cache"
+    "uksc_cache|麒麟软件中心缓存|${HOME}/.cache/uksc|user|clean_uksc_cache"
+)
+
+# 仅报告项（只显示体积，永不自动清理）: "ID|名称|检查路径"
+# 注意：不要加入用户数据目录（微信/WPS等）与在用软件目录（ms-playwright）
+REPORT_ITEMS=(
+    "browser360_cache|360浏览器缓存|${HOME}/.cache/browser360"
+    "zhanlu_sessions|湛卢会话目录|${HOME}/Documents/Zhanlu"
 )
 
 # ============================================================
@@ -314,6 +354,20 @@ do_check() {
     echo -e "${GRAY}--------------------------------------------------------${NC}"
     echo -e "${BOLD}可清理总计: $(format_size $total_bytes)${NC}"
     echo ""
+
+    # 仅报告项：只显示体积，不纳入清理（2026-11-11 新增）
+    if [ ${#REPORT_ITEMS[@]} -gt 0 ]; then
+        echo -e "${BOLD}仅报告（不自动清理，需人工处置）:${NC}"
+        echo -e "${GRAY}--------------------------------------------------------${NC}"
+        for item in "${REPORT_ITEMS[@]}"; do
+            IFS='|' read -r id name path <<< "$item"
+            local rsize
+            rsize=$(get_size_bytes "$path")
+            [ "$rsize" -eq 0 ] 2>/dev/null && continue
+            printf "  %-28s %10s\n" "$name" "$(format_size $rsize)"
+        done
+        echo ""
+    fi
 }
 
 # ============================================================
@@ -369,17 +423,23 @@ do_clean() {
         fi
 
         echo -e "  ${YELLOW}[清理]${NC} $name (${before_str})..."
-        $func >/dev/null 2>&1
+        local func_rc=0
+        $func >/dev/null 2>&1 || func_rc=$?
 
         local after_bytes after_str freed_bytes freed_str
         after_bytes=$(get_item_size "$id" "$path")
         after_str=$(format_size "$after_bytes")
         freed_bytes=$((before_bytes - after_bytes))
-        freed_str=$(format_size "$freed_bytes")
+        freed_str=$(format_size $freed_bytes)
 
-        if [ "$after_bytes" -ge "$before_bytes" ] 2>/dev/null; then
-            echo -e "         ${RED}[失败]${NC} 清理前=${before_str} 清理后=${after_str}（权限不足或被占用）"
-            echo "  [失败] $name | 清理前=${before_str} 清理后=${after_str}（权限不足或被占用）" >> "$log_file"
+        if [ "$freed_bytes" -le 0 ] 2>/dev/null; then
+            if [ "$func_rc" -ne 0 ]; then
+                echo -e "         ${RED}[失败]${NC} 清理命令执行失败(rc=${func_rc})，可能权限不足或被占用"
+                echo "  [失败] $name | rc=${func_rc} | 清理前=${before_str} 清理后=${after_str}" >> "$log_file"
+            else
+                echo -e "         ${GRAY}[无变化]${NC} 清理前=${before_str} 清理后=${after_str}（本无可清内容）"
+                echo "  [无变化] $name | 清理前=${before_str} 清理后=${after_str}" >> "$log_file"
+            fi
         else
             echo -e "         ${GREEN}完成${NC} 清理前=${before_str} 清理后=${after_str} 释放=${freed_str}"
             echo "  [完成] $name | 清理前=${before_str} 清理后=${after_str} 释放=${freed_str}" >> "$log_file"
@@ -423,6 +483,10 @@ do_clean() {
 do_auto() {
     rotate_logs
     local threshold_gb="${1:-$DEFAULT_THRESHOLD_GB}"
+    # 参数校验：非正整数时回退默认阈值，避免静默退化为0导致每次必清
+    if ! [[ "$threshold_gb" =~ ^[0-9]+$ ]] || [ "$threshold_gb" -le 0 ]; then
+        threshold_gb="$DEFAULT_THRESHOLD_GB"
+    fi
     local threshold_bytes=$((threshold_gb * 1073741824))
 
     local total_bytes=0
@@ -498,8 +562,17 @@ show_help() {
   [系统] 核心转储文件(coredump)
   [系统] APT包缓存
   [系统] 硬件更新日志(hwupdate)
-  [用户] 应用缓存(~/.cache)
   [用户] npm缓存(~/.npm)
+  [用户] conda包缓存(conda clean官方命令)
+  [用户] pip缓存(~/.cache/pip)
+  [用户] uv缓存(~/.cache/uv)
+  [用户] 麒麟软件中心缓存(~/.cache/uksc)
+
+仅报告（不自动清理）:
+  360浏览器缓存(~/.cache/browser360)
+  湛卢会话目录(~/Documents/Zhanlu)
+
+注意：2026-11-11 起已移除"~/.cache 一刀切"清理项（会误删在用软件缓存）
 
 文件结构:
   ${SCRIPT_DIR}/

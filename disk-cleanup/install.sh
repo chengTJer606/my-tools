@@ -13,7 +13,7 @@ export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:${HOME
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONFIG_FILE="${SCRIPT_DIR}/config/config.conf"
 BIN_LINK="${HOME}/.local/bin/disk-cleanup"
-CRON_JOB="0 3 * * 0 ${SCRIPT_DIR}/disk-cleanup.sh --cron >> ${SCRIPT_DIR}/logs/cron.log 2>&1"
+CRON_JOB="0 10 * * 1 ${SCRIPT_DIR}/disk-cleanup.sh --cron >> ${SCRIPT_DIR}/logs/cron.log 2>&1"
 
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
@@ -115,10 +115,10 @@ if crontab -l 2>/dev/null | grep -q .; then
 fi
 (
     [ -n "$EXISTING_CRONS" ] && echo "$EXISTING_CRONS" || true
-    echo "${CRON_MARKER} - 每周日凌晨3点自动清理"
+    echo "${CRON_MARKER} - 每周一上午10点自动清理"
     echo "$CRON_JOB"
 ) | crontab -
-echo -e "  ${GREEN}crontab 已设置: 每周日凌晨3点自动检查清理${NC}"
+echo -e "  ${GREEN}crontab 已设置: 每周一上午10点自动检查清理${NC}"
 echo -e "  ${GREEN}定时任务: ${CRON_JOB}${NC}"
 
 # 5. 验证
